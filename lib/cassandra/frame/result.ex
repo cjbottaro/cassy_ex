@@ -78,7 +78,7 @@ defmodule Cassandra.Frame.Result do
     {rows, _data} = Enum.reduce(0..row_count-1, {[], data}, fn _, {rows, data} ->
       {row, data} = Enum.reduce(col_count-1..0, {[], data}, fn i, {row, data} ->
         {_keyspace, _table, _name, type} = elem(columns, i)
-        {value, data} = read_value(data, type)
+        {value, data} = read_value(type, data)
         {[value | row], data}
       end)
 

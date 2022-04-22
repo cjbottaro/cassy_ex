@@ -50,47 +50,6 @@ defmodule Cassandra.Frame.Data do
     def consistency(unquote(value)), do: unquote(name)
   end)
 
-  def read_byte(data) do
-    <<n::integer-8, data::binary>> = data
-    {n, data}
-  end
-
-  def read_short(data) do
-    <<n::integer-16, data::binary>> = data
-    {n, data}
-  end
-
-  def read_int(data) do
-    <<n::integer-signed-32, data::binary>> = data
-    {n, data}
-  end
-
-  def read_long(data) do
-    <<n::integer-signed-64, data::binary>> = data
-    {n, data}
-  end
-
-  def read_string(data) do
-    {n, data} = read_short(data)
-    <<s::binary-size(n), data::binary>> = data
-    {s, data}
-  end
-
-  def read_bytes(data) do
-    {n, data} = read_int(data)
-    if n < 0 do
-      {nil, data}
-    else
-      <<s::binary-size(n), data::binary>> = data
-      {s, data}
-    end
-  end
-
-  def read_value(data, type) do
-    {bytes, data} = read_bytes(data)
-    {decode_value(type, bytes), data}
-  end
-
   def byte(n) do
     <<n::integer-8>>
   end
@@ -136,24 +95,199 @@ defmodule Cassandra.Frame.Data do
     [short(i), data]
   end
 
-  def value(n) when is_integer(n) do
-    [int(4), <<n::integer-32>>]
+  @doc """
+  Serialize [value]
+
+  The argument _should_ be a tuple containing the type and value. If it isn't a
+  tuple, the type will be guessed.
+
+  ```
+  iex> value({:text}, "foo")
+  [<<0, 0, 0, 3>>, "foo"]
+
+  iex> value("foo")
+  [<<0, 0, 0, 3>>, "foo"]
+  ```
+  """
+  def value({type, v}) do
+    v = encode_value(type, v)
+    [int(IO.iodata_length(v)), v]
   end
 
-  def decode_value(_type, nil), do: nil
+  def value(v) do
+    v = guess_value(v)
+    [int(IO.iodata_length(v)), v]
+  end
 
-  def decode_value(:boolean,  <<n::integer-8>>),         do: n != 0
-  def decode_value(:tinyint,  <<n::integer-signed-8>>),  do: n
-  def decode_value(:smallint, <<n::integer-signed-16>>), do: n
-  def decode_value(:int,      <<n::integer-signed-32>>), do: n
-  def decode_value(:float,    <<f::float-32>>),          do: f
-  def decode_value(:double,   <<f::float-64>>),          do: f
-  def decode_value(:bigint,   <<n::integer-signed-64>>), do: n
-  def decode_value(:counter,  <<n::integer-signed-64>>), do: n
+  def read_byte(data) do
+    <<n::integer-8, data::binary>> = data
+    {n, data}
+  end
 
-  def decode_value(type, data) when type in [:text, :ascii, :blob, :varchar], do: data
+  def read_short(data) do
+    <<n::integer-16, data::binary>> = data
+    {n, data}
+  end
 
-  def decode_value(type, data) when type in [:uuid, :timeuuid] do
+  def read_int(data) do
+    <<n::integer-signed-32, data::binary>> = data
+    {n, data}
+  end
+
+  def read_long(data) do
+    <<n::integer-signed-64, data::binary>> = data
+    {n, data}
+  end
+
+  def read_string(data) do
+    {n, data} = read_short(data)
+    <<s::binary-size(n), data::binary>> = data
+    {s, data}
+  end
+
+  def read_bytes(data) do
+    {n, data} = read_int(data)
+    if n < 0 do
+      {nil, data}
+    else
+      <<s::binary-size(n), data::binary>> = data
+      {s, data}
+    end
+  end
+
+  def read_string_map(data) do
+    {i, data} = read_short(data)
+    Enum.reduce(1..i, {%{}, data}, fn _, {map, data} ->
+      {k, data} = read_string(data)
+      {v, data} = read_string(data)
+      map = Map.put(map, k, v)
+      {map, data}
+    end)
+  end
+
+  def read_value(type, data) do
+    {bytes, data} = read_bytes(data)
+    {decode_value(type, bytes), data}
+  end
+
+  defp guess_value(n) when is_integer(n) and (n < -2_147_483_648 or n > 2_147_483_647) do
+    encode_value(:bigint, n)
+  end
+
+  defp guess_value(n) when is_integer(n) and (n >= -2_147_483_648 and n <= 2_147_483_647) do
+    encode_value(:int, n)
+  end
+
+  defp guess_value(<<_::8-bytes, ?-, _::4-bytes, ?-, _::4-bytes, ?-, _::4-bytes, ?-, _::12-bytes>> = b) do
+    encode_value(:uuid, b)
+  end
+
+  defp guess_value(b) when is_binary(b) do
+    encode_value(:text, b)
+  end
+
+  defp encode_value(:ascii, b) when is_binary(b), do: b
+
+  defp encode_value(:bigint, n) when is_integer(n), do: <<n::integer-64>>
+
+  defp encode_value(:blob, b) when is_binary(b), do: b
+
+  defp encode_value(:boolean, true),  do: <<1::integer-8>>
+  defp encode_value(:boolean, false), do: <<0::integer-8>>
+
+  defp encode_value(:counter, n) when is_integer(n), do: <<n::integer-64>>
+
+  defp encode_value(:date, %Date{} = d) do
+    value = Date.diff(d, ~D[1970-01-01]) + 0x80000000
+    <<value::integer-32>>
+  end
+
+  defp encode_value(:decimal, %Decimal{coef: coef, exp: exp, sign: sign}) do
+    [encode_value(:int, -exp), encode_value(:varint, sign*coef)]
+  end
+
+  defp encode_value(:double, f) when is_float(f), do: <<f::float-64>>
+
+  defp encode_value(:float, f) when is_float(f), do: <<f::float-32>>
+
+  defp encode_value(:inet, {n1, n2, n3, n4}), do: <<n1, n2, n3, n4>>
+  defp encode_value(:inet, {n1, n2, n3, n4, n5, n6, n7, n8}) do
+    <<n1::16, n2::16, n3::16, n4::16, n5::16, n6::16, n7::16, n8::16>>
+  end
+
+  defp encode_value(:int, n), do: <<n::integer-32>>
+
+  defp encode_value(:list, l) when is_list(l), do: raise "TODO"
+
+  defp encode_value(:map, m) when is_map(m), do: raise "TODO"
+
+  defp encode_value(:set, %MapSet{} = _s), do: raise "TODO"
+
+  defp encode_value(:smallint, n) when is_integer(n), do: <<n::integer-16>>
+
+  defp encode_value(:text, b) when is_binary(b), do: b
+
+  defp encode_value(:time, %Time{} = t) do
+    <<Time.diff(t, ~T[00:00:00.000000])::integer-64>>
+  end
+
+  defp encode_value(:timestamp, %DateTime{} = dt) do
+    <<DateTime.to_unix(dt, :millisecond)::integer-64>>
+  end
+
+  defp encode_value(:timeuuid, b) when is_binary(b), do: encode_value(:uuid, b)
+
+  defp encode_value(:tinyint, n) when is_integer(n), do: <<n::integer-8>>
+
+  defp encode_value(:tuple, _t), do: raise "TODO"
+
+  defp encode_value(:uuid, b) when is_binary(b) do
+    case byte_size(b) do
+      16 -> b
+      36 ->
+        <<a::8-bytes, ?-, b::4-bytes, ?-, c::4-bytes, ?-, d::4-bytes, ?-, e::12-bytes>> = b
+        <<
+          Base.decode16!(a, case: :mixed)::4-bytes,
+          Base.decode16!(b, case: :mixed)::2-bytes,
+          Base.decode16!(c, case: :mixed)::2-bytes,
+          Base.decode16!(d, case: :mixed)::2-bytes,
+          Base.decode16!(e, case: :mixed)::6-bytes
+        >>
+    end
+  end
+
+  defp encode_value(:varchar, b) when is_binary(b), do: b
+
+  defp encode_value(:varint, n) when is_integer(n) do
+    size = varint_byte_size(n) * 8
+    <<n::size(size)>>
+  end
+
+  defp varint_byte_size(value) when value > 127 do
+    use Bitwise
+    1 + varint_byte_size(value >>> 8)
+  end
+
+  defp varint_byte_size(value) when value < -128 do
+    varint_byte_size(-value - 1)
+  end
+
+  defp varint_byte_size(_value), do: 1
+
+  defp decode_value(_type, nil), do: nil
+
+  defp decode_value(:boolean,  <<n::integer-8>>),         do: n != 0
+  defp decode_value(:tinyint,  <<n::integer-signed-8>>),  do: n
+  defp decode_value(:smallint, <<n::integer-signed-16>>), do: n
+  defp decode_value(:int,      <<n::integer-signed-32>>), do: n
+  defp decode_value(:float,    <<f::float-32>>),          do: f
+  defp decode_value(:double,   <<f::float-64>>),          do: f
+  defp decode_value(:bigint,   <<n::integer-signed-64>>), do: n
+  defp decode_value(:counter,  <<n::integer-signed-64>>), do: n
+
+  defp decode_value(type, data) when type in [:text, :ascii, :blob, :varchar], do: data
+
+  defp decode_value(type, data) when type in [:uuid, :timeuuid] do
     <<a::4-bytes, b::2-bytes, c::2-bytes, d::2-bytes, e::6-bytes>> = data
     a = Base.encode16(a, case: :lower)
     b = Base.encode16(b, case: :lower)
@@ -163,33 +297,33 @@ defmodule Cassandra.Frame.Data do
     "#{a}-#{b}-#{c}-#{d}-#{e}"
   end
 
-  def decode_value(:timestamp, <<n::integer-64>>) do
+  defp decode_value(:timestamp, <<n::integer-64>>) do
     DateTime.from_unix!(n, :millisecond)
   end
 
-  def decode_value(:varint, data) do
+  defp decode_value(:varint, data) do
     size = bit_size(data)
     <<value::size(size)-signed>> = data
     value
   end
 
-  def decode_value(:decimal, <<scale::32-signed, data::binary>>) do
+  defp decode_value(:decimal, <<scale::32-signed, data::binary>>) do
     value = decode_value(data, :varint)
     sign = if value < 0, do: -1, else: 1
     Decimal.new(sign, abs(value), -scale)
   end
 
-  def decode_value(:inet, <<data::4-bytes>>) do
+  defp decode_value(:inet, <<data::4-bytes>>) do
     <<n1, n2, n3, n4>> = data
     {n1, n2, n3, n4}
   end
 
-  def decode_value(:inet, <<data::16-bytes>>) do
+  defp decode_value(:inet, <<data::16-bytes>>) do
     <<n1::16, n2::16, n3::16, n4::16, n5::16, n6::16, n7::16, n8::16>> = data
     {n1, n2, n3, n4, n5, n6, n7, n8}
   end
 
-  def decode_value(type, _data) do
+  defp decode_value(type, _data) do
     raise "CQL type '#{type}' not implemented for decoding yet"
   end
 

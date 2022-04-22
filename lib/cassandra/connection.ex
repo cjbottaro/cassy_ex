@@ -1,6 +1,6 @@
 defmodule Cassandra.Connection do
   use Connection
-  alias Cassandra.{Frame, Result}
+  alias Cassandra.{Frame, Result, Error}
 
   def query(conn, cql, opts \\ []) do
     consistency = Keyword.get(opts, :consistency, :quorum)
@@ -10,13 +10,14 @@ defmodule Cassandra.Connection do
       consistency: consistency,
       values: opts[:values]
     }
+    |> IO.inspect()
 
     with {:ok, header, data} <- Connection.call(conn, {:query, frame}),
       {:ok, frame} <- Frame.from_binary(header, data)
     do
       case frame do
         %Frame.Result{} -> {:ok, Result.from_frame(frame)}
-        %Frame.Error{} -> {:ok, frame}
+        %Frame.Error{} -> {:error, Error.from_frame(frame)}
       end
     end
   end
