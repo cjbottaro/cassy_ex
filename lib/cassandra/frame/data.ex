@@ -86,6 +86,13 @@ defmodule Cassandra.Frame.Data do
     [int(byte_size(s)), s]
   end
 
+  def string_list(l) do
+    [
+      short(length(l)),
+      Enum.map(l, &string/1)
+    ]
+  end
+
   def string_map(map) do
     {i, data} = Enum.reduce(map, {0, []}, fn
       {_k, nil}, {i, data} -> {i, data}
@@ -163,6 +170,16 @@ defmodule Cassandra.Frame.Data do
       map = Map.put(map, k, v)
       {map, data}
     end)
+  end
+
+  def read_string_list(data) do
+    {n, data} = read_short(data)
+    {l, data} = Enum.reduce(1..n, {[], data}, fn _, {l, data} ->
+      {s, data} = read_string(data)
+      {[s | l], data}
+    end)
+
+    {Enum.reverse(l), data}
   end
 
   def read_value(type, data) do

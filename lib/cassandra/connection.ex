@@ -10,7 +10,6 @@ defmodule Cassandra.Connection do
       consistency: consistency,
       values: opts[:values]
     }
-    |> IO.inspect()
 
     with {:ok, header, data} <- Connection.call(conn, {:query, frame}),
       {:ok, frame} <- Frame.from_binary(header, data)
@@ -51,11 +50,17 @@ defmodule Cassandra.Connection do
     end
   end
 
+  # Can this even happen?
+  def handle_info({:tcp, _socket, data}, state) when byte_size(state.buffer) + byte_size(data) < 9 do
+    {:noreply, %{state | buffer: state.buffer <> data}}
+  end
+
   def handle_info({:tcp, socket, data}, state) do
+    data = state.buffer <> data
+
     <<header::9-bytes, data::binary>> = data
     {:ok, header} = Frame.Header.from_binary(header)
     body_size = header.length
-    data = state.buffer <> data
     data_size = byte_size(data)
 
     # Our packet could be less than a frame... or more than a frame?
@@ -94,6 +99,8 @@ defmodule Cassandra.Connection do
       {:ok, %Frame.Ready{}} <- Frame.from_binary(header, data),
       :ok <- :inet.setopts(socket, [active: :once])
     do
+      IO.inspect :inet.peername(socket)
+      IO.inspect :inet.sockname(socket)
       {:ok, %{state | socket: socket, connected: true}}
     end
   end
