@@ -1,11 +1,11 @@
 defmodule Cassandra.Frame.Result do
-  import Cassandra.Frame, except: [from_binary: 2]
+  use Cassandra.Frame
+
+  @opcode :result
 
   defstruct [
-    :opcode,
-    :flags,
-    :stream,
     :kind,
+    :flags,
     :paging_state,
     :keyspace,
     :table,
@@ -18,10 +18,7 @@ defmodule Cassandra.Frame.Result do
   def from_binary(data) do
     {kind, data} = read_int(data)
 
-    %__MODULE__{
-      opcode: :result,
-      kind: kind(kind)
-    }
+    %__MODULE__{ kind: kind(kind) }
     |> from_binary(data)
   end
 

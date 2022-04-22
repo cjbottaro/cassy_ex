@@ -1,12 +1,17 @@
 defmodule Cassandra.Frame.Error do
-  import Cassandra.Frame
+  use Cassandra.Frame
 
-  defstruct [:flags, :stream, :code, :msg]
+  @opcode :error
+
+  defstruct [:code, :msg]
 
   def from_binary(data) do
-    {%__MODULE__{}, data}
-    |> int(:code)
-    |> string(:msg)
-    |> elem(0)
+    {code, data} = read_int(data)
+    {msg, _data} = read_string(data)
+
+    %__MODULE__{
+      code: code,
+      msg: msg
+    }
   end
 end

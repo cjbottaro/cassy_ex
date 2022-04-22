@@ -1,9 +1,9 @@
 defmodule Cassandra.Frame.Query do
-  import Cassandra.Frame
+  use Cassandra.Frame
+
+  @opcode :query
 
   defstruct [
-    :flags,
-    :stream,
     :query,
     :consistency,
     :no_metadata,
@@ -12,7 +12,6 @@ defmodule Cassandra.Frame.Query do
     :paging_state,
     :serial_consistency,
     :timestamp,
-    opcode: :query,
   ]
 
   def to_iodata(frame) do

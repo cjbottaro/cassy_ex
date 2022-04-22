@@ -1,5 +1,5 @@
 defmodule Cassandra.Frame.Header do
-  import Cassandra.Frame
+  import Cassandra.Frame.Data
 
   defstruct [
     version: :request,
@@ -10,17 +10,18 @@ defmodule Cassandra.Frame.Header do
   ]
 
   def from_binary(data) do
-    header = {%__MODULE__{}, data}
-    |> byte(:version)
-    |> byte(:flags)
-    |> short(:stream)
-    |> byte(:opcode)
-    |> int(:length)
-    |> elem(0)
+    {version, data} = read_byte(data)
+    {flags,   data} = read_byte(data)
+    {stream,  data} = read_short(data)
+    {opcode,  data} = read_byte(data)
+    {length, _data} = read_int(data)
 
-    header = %{header |
-      version: version(header.version),
-      opcode: opcode(header.opcode)
+    header = %__MODULE__{
+      version: version(version),
+      opcode: opcode(opcode),
+      flags: flags,
+      stream: stream,
+      length: length
     }
 
     {:ok, header}

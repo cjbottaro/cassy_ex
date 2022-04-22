@@ -1,5 +1,9 @@
 defmodule Cassandra.Frame.Ready do
-  defstruct [:flags, :stream]
+  use Cassandra.Frame
+
+  @opcode :ready
+
+  defstruct []
 
   def from_binary("") do
     %__MODULE__{}

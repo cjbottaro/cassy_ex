@@ -1,12 +1,24 @@
 defmodule Cassandra.Connection do
   use Connection
-  alias Cassandra.Frame
-
-  @default_opts [consistency: :quorum]
+  alias Cassandra.{Frame, Result}
 
   def query(conn, cql, opts \\ []) do
-    opts = Keyword.merge(@default_opts, opts)
-    Connection.call(conn, {:query, cql, opts})
+    consistency = Keyword.get(opts, :consistency, :quorum)
+
+    frame = %Frame.Query{
+      query: cql,
+      consistency: consistency,
+      values: opts[:values]
+    }
+
+    with {:ok, header, data} <- Connection.call(conn, {:query, frame}),
+      {:ok, frame} <- Frame.from_binary(header, data)
+    do
+      case frame do
+        %Frame.Result{} -> {:ok, Result.from_frame(frame)}
+        %Frame.Error{} -> {:ok, frame}
+      end
+    end
   end
 
   def start_link(config \\ []) do
@@ -22,24 +34,51 @@ defmodule Cassandra.Connection do
       socket: nil,
       connected: false,
       stream: 0,
+      waiters: %{},
+      buffer: ""
     }
 
     establish_connection(state)
   end
 
-  def handle_call({:query, cql, opts}, _from, state) do
+  def handle_call({:query, frame}, from, state) do
     {stream, state} = get_stream(state)
 
-    frame = %Frame.Query{
-      stream: stream,
-      query: cql,
-      consistency: opts[:consistency],
-      values: opts[:values]
-    }
+    case send_frame(state.socket, frame, stream: stream) do
+      :ok -> {:noreply, %{state | waiters: Map.put(state.waiters, stream, from)}}
+      error -> {:reply, error, state}
+    end
+  end
 
-    :ok = send_frame(state.socket, frame)
+  def handle_info({:tcp, socket, data}, state) do
+    <<header::9-bytes, data::binary>> = data
+    {:ok, header} = Frame.Header.from_binary(header)
+    body_size = header.length
+    data = state.buffer <> data
+    data_size = byte_size(data)
 
-    {:reply, recv_frame(state.socket), state}
+    # Our packet could be less than a frame... or more than a frame?
+
+    {body, buffer} = cond do
+      body_size > data_size ->
+        {:ok, more} = :gen_tcp.recv(socket, header.length - data_size)
+        {data <> more, ""}
+
+      body_size == data_size ->
+        {data, ""}
+
+      body_size < data_size ->
+        <<data::binary-size(body_size), buffer::binary>> = data
+        {data, buffer}
+    end
+
+    {from, waiters} = Map.pop!(state.waiters, header.stream)
+
+    :ok = Connection.reply(from, {:ok, header, body})
+
+    :ok = :inet.setopts(socket, [active: :once])
+
+    {:noreply, %{state | waiters: waiters, buffer: buffer}}
   end
 
   defp establish_connection(state) do
@@ -50,9 +89,11 @@ defmodule Cassandra.Connection do
 
     with {:ok, socket} <- :gen_tcp.connect(host, port, opts),
       :ok <- send_frame(socket, %Frame.Startup{}),
-      {:ok, %Frame.Ready{}} <- recv_frame(socket)
+      {:ok, header, data} <- recv_frame(socket),
+      {:ok, %Frame.Ready{}} <- Frame.from_binary(header, data),
+      :ok <- :inet.setopts(socket, [active: :once])
     do
-      {:ok, %{state | socket: socket}}
+      {:ok, %{state | socket: socket, connected: true}}
     end
   end
 
@@ -61,8 +102,8 @@ defmodule Cassandra.Connection do
     {stream, %{state | stream: stream + 1}}
   end
 
-  def send_frame(socket, frame) do
-    data = Frame.to_iodata(frame)
+  def send_frame(socket, frame, header \\ []) do
+    data = Frame.to_iodata(frame, header)
     :gen_tcp.send(socket, data)
   end
 
@@ -71,7 +112,7 @@ defmodule Cassandra.Connection do
       {:ok, header} <- Frame.Header.from_binary(header),
       {:ok, body} <- recv_body(socket, header.length)
     do
-      Frame.from_binary(header, body)
+      {:ok, header, body}
     end
   end
 

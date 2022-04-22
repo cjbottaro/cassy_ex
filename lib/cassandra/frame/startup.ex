@@ -1,10 +1,9 @@
 defmodule Cassandra.Frame.Startup do
-  import Cassandra.Frame
+  use Cassandra.Frame
+
+  @opcode :startup
 
   defstruct [
-    opcode: :startup,
-    flags: 0,
-    stream: 0,
     compression: nil,
     no_compact: nil,
     throw_on_overload: nil
