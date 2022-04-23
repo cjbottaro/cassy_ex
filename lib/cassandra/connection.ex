@@ -5,6 +5,8 @@ defmodule Cassandra.Connection do
 
   @type t :: GenServer.server()
 
+  @spec execute(t, binary, Keyword.t) :: {:ok, Result.t} | {:error, Error.t}
+
   def execute(conn, cql, opts \\ []) do
     opts = opts
     |> Keyword.put(:query, cql)
@@ -26,14 +28,30 @@ defmodule Cassandra.Connection do
     end
   end
 
+  @spec execute!(t, binary, Keyword.t) :: Result.t | no_return
+
+  def execute!(conn, cql, opts \\ []) do
+    case execute(conn, cql, opts) do
+      {:ok, result} -> result
+      {:error, error} -> raise error
+    end
+  end
+
+  @default_config [
+    host: "localhost:9042",
+    async_connect: false,
+  ]
+
   def start(config \\ []) do
-    {opts, config} = Keyword.split(config, [:name])
-    Connection.start(__MODULE__, config, opts)
+    with {:ok, config, opts} <- build_and_validate_config(config) do
+      Connection.start(__MODULE__, config, opts)
+    end
   end
 
   def start_link(config \\ []) do
-    {opts, config} = Keyword.split(config, [:name])
-    Connection.start_link(__MODULE__, config, opts)
+    with {:ok, config, opts} <- build_and_validate_config(config) do
+      Connection.start_link(__MODULE__, config, opts)
+    end
   end
 
   def stop(conn) do
@@ -41,10 +59,8 @@ defmodule Cassandra.Connection do
   end
 
   def init(config) do
-    host = Keyword.get(config, :host, "localhost:9042")
-
     state = %{
-      host: host,
+      host: config[:host],
       socket: nil,
       connected: false,
       stream: 0,
@@ -151,7 +167,33 @@ defmodule Cassandra.Connection do
     end
   end
 
-  def recv_body(_socket, 0), do: {:ok, ""}
-  def recv_body(socket, n), do: :gen_tcp.recv(socket, n)
+  defp recv_body(_socket, 0), do: {:ok, ""}
+  defp recv_body(socket, n), do: :gen_tcp.recv(socket, n)
+
+  defp build_and_validate_config(config) do
+    {config, opts} = Keyword.merge(@default_config, config)
+    |> Keyword.split([:host, :async_connect])
+
+    with :ok <- validate_host(config[:host]) do
+      {:ok, config, opts}
+    end
+  end
+
+  defp validate_host(host) when is_binary(host) do
+    host = String.trim(host)
+
+    with [_host, port] <- String.split(host, ":") do
+      try do
+        _ = String.to_integer(port)
+        :ok
+      rescue
+        ArgumentError -> {:error, "invalid port"}
+      end
+    else
+      [""] -> {:error, "host is required"}
+      [_] -> {:error, "port is missing from host"}
+    end
+  end
+  defp validate_host(_), do: {:error, "host is required"}
 
 end
