@@ -6,13 +6,10 @@ defmodule Cassandra.Connection do
   @type t :: GenServer.server()
 
   def execute(conn, cql, opts \\ []) do
-    consistency = Keyword.get(opts, :consistency, :quorum)
+    opts = Keyword.put_new(opts, :consistency, :quorum)
 
-    frame = %Frame.Query{
-      query: cql,
-      consistency: consistency,
-      values: opts[:values]
-    }
+    frame = %Frame.Query{ query: cql }
+    |> struct!(opts)
 
     with {:ok, header, data} <- Connection.call(conn, {:query, frame}),
       {:ok, frame} <- Frame.from_binary(header, data)

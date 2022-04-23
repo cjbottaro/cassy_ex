@@ -109,7 +109,7 @@ defmodule Cassandra.Frame.Data do
   tuple, the type will be guessed.
 
   ```
-  iex> value({:text}, "foo")
+  iex> value({:text, "foo"})
   [<<0, 0, 0, 3>>, "foo"]
 
   iex> value("foo")

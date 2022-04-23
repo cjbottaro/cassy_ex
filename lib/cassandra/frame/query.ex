@@ -42,6 +42,7 @@ defmodule Cassandra.Frame.Query do
 
     {flags, iodata} = if frame.page_size do
       {flags ||| 0x04, [iodata, int(frame.page_size)]}
+      |> IO.inspect
     else
       {flags, iodata}
     end
