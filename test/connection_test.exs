@@ -162,6 +162,46 @@ defmodule CassandraTest do
 
   end
 
+  test "lwt", %{conn: conn} do
+    id = Utils.uuid()
+
+    {:ok, %{kind: :rows, rows: [row]}} = Connection.execute(conn,
+      "insert into test.collections (id, m, s, l, t) values (:id, :m, :s, :l, :t) if not exists",
+      values: %{
+        id: id,
+        m: %{1 => "one"},
+        s: MapSet.new([1, 2, 3, 3]),
+        l: ["one", "one", "two"],
+        t: {1, "one", "ab9dcec9-2877-46d9-9e63-be00a94ac900"}
+      }
+    )
+
+    assert row["[applied]"] == true
+    assert row["id"] == nil
+    assert row["m"] == nil
+    assert row["s"] == nil
+    assert row["l"] == nil
+    assert row["t"] == nil
+
+    {:ok, %{kind: :rows, rows: [row]}} = Connection.execute(conn,
+      "insert into test.collections (id, m, s, l, t) values (:id, :m, :s, :l, :t) if not exists",
+      values: %{
+        id: id,
+        m: %{1 => "one"},
+        s: MapSet.new([1, 2, 3, 3]),
+        l: ["one", "one", "two"],
+        t: {1, "one", "ab9dcec9-2877-46d9-9e63-be00a94ac900"}
+      }
+    )
+
+    assert row["[applied]"] == false
+    assert row["id"] == id
+    assert row["m"] == %{ 1 => "one" }
+    assert row["s"] == MapSet.new([1, 2, 3])
+    assert row["l"] == ["one", "one", "two"]
+    assert row["t"] == {1, "one", "ab9dcec9-2877-46d9-9e63-be00a94ac900"}
+  end
+
   test "bad type", %{conn: conn} do
     {:error, error} = Connection.execute(conn,
       "insert into test.collections (id, m) values (?, ?)",
