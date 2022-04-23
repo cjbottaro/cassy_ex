@@ -1,8 +1,6 @@
 defmodule Cassandra.Frame.Execute do
   use Cassandra.Frame
 
-  @opcode :execute
-
   defstruct [
     :header,
     :query_id,

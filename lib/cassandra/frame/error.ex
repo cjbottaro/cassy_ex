@@ -1,8 +1,6 @@
 defmodule Cassandra.Frame.Error do
   use Cassandra.Frame
 
-  @opcode :error
-
   defstruct [:header, :code, :msg]
 
   def from_binary(data) do

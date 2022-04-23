@@ -1,8 +1,6 @@
 defmodule Cassandra.Frame.Result do
   use Cassandra.Frame
 
-  @opcode :result
-
   defstruct [
     :header,
     :kind,

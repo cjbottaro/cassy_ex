@@ -1,8 +1,6 @@
 defmodule Cassandra.Frame.Startup do
   use Cassandra.Frame
 
-  @opcode :startup
-
   defstruct [
     header: nil,
     compression: nil,

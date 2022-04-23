@@ -3,15 +3,20 @@ defmodule Cassandra.Frame do
 
   @type t :: struct
 
-  defmacro __using__(_opts \\ []) do
+  defmacro __using__(opts \\ []) do
+    opcode = opts[:opcode]
     quote do
       import Cassandra.Frame.Data
-      @before_compile Cassandra.Frame
-    end
-  end
 
-  defmacro __before_compile__(_env) do
-    quote do
+      if unquote(opcode) do
+        @opcode unquote(opcode)
+      else
+        @opcode Module.split(__MODULE__)
+        |> List.last()
+        |> Macro.underscore()
+        |> String.to_atom()
+      end
+
       def opcode, do: @opcode
     end
   end

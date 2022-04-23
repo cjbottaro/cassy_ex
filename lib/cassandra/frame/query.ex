@@ -1,8 +1,6 @@
 defmodule Cassandra.Frame.Query do
   use Cassandra.Frame
 
-  @opcode :query
-
   defstruct [
     :header,
     :query,
