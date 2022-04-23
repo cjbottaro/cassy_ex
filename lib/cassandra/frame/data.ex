@@ -122,7 +122,7 @@ defmodule Cassandra.Frame.Data do
   end
 
   def value(v) do
-    v = guess_value(v)
+    v = encode_value(guess_type(v), v)
     [int(IO.iodata_length(v)), v]
   end
 
@@ -187,20 +187,54 @@ defmodule Cassandra.Frame.Data do
     {decode_value(type, bytes), data}
   end
 
-  defp guess_value(n) when is_integer(n) and (n < -2_147_483_648 or n > 2_147_483_647) do
-    encode_value(:bigint, n)
+  defp guess_type(nil), do: nil
+
+  defp guess_type(n) when is_integer(n) and (n < -2_147_483_648 or n > 2_147_483_647) do
+    :bigint
   end
 
-  defp guess_value(n) when is_integer(n) and (n >= -2_147_483_648 and n <= 2_147_483_647) do
-    encode_value(:int, n)
+  defp guess_type(n) when is_integer(n) and (n >= -2_147_483_648 and n <= 2_147_483_647) do
+    :int
   end
 
-  defp guess_value(<<_::8-bytes, ?-, _::4-bytes, ?-, _::4-bytes, ?-, _::4-bytes, ?-, _::12-bytes>> = b) do
-    encode_value(:uuid, b)
+  defp guess_type(<<_::8-bytes, ?-, _::4-bytes, ?-, _::4-bytes, ?-, _::4-bytes, ?-, _::12-bytes>>) do
+    :uuid
   end
 
-  defp guess_value(b) when is_binary(b) do
-    encode_value(:text, b)
+  defp guess_type(b) when is_binary(b) do
+    :text
+  end
+
+  defp guess_type(m) when is_map(m) and map_size(m) == 0 do
+    {:map, nil, nil}
+  end
+
+  defp guess_type(l) when is_list(l) do
+    case l do
+      [v | _] -> {:list, guess_type(v)}
+      [] -> {:list, nil}
+    end
+  end
+
+  defp guess_type(%MapSet{} = s) do
+    if MapSet.size(s) == 0 do
+      {:set, nil}
+    else
+      {:set, guess_type(Enum.at(s, 0))}
+    end
+  end
+
+  defp guess_type(m) when is_map(m) and not is_struct(m) do
+    if map_size(m) == 0 do
+      {:map, nil, nil}
+    else
+      {k, v} = Enum.at(m, 0)
+      {:map, guess_type(k), guess_type(v)}
+    end
+  end
+
+  defp guess_type(t) when is_tuple(t) do
+    {:tuple, Tuple.to_list(t) |> Enum.map(&guess_type/1)}
   end
 
   defp encode_value(:ascii, b) when is_binary(b), do: b
@@ -234,11 +268,32 @@ defmodule Cassandra.Frame.Data do
 
   defp encode_value(:int, n), do: <<n::integer-32>>
 
-  defp encode_value(:list, l) when is_list(l), do: raise "TODO"
+  defp encode_value({:list, type}, l) do
+    l = if is_list(l), do: l, else: Enum.into(l, [])
+    [
+      int(length(l)),
+      Enum.map(l, fn v -> bytes(encode_value(type, v)) end)
+    ]
+  end
 
-  defp encode_value(:map, m) when is_map(m), do: raise "TODO"
+  defp encode_value({:map, ktype, vtype}, m) when is_map(m) do
+    [
+      int(map_size(m)),
+      Enum.map(m, fn {k, v} ->
+        k = encode_value(ktype, k)
+        v = encode_value(vtype, v)
+        [bytes(k), bytes(v)]
+      end)
+    ]
+  end
 
-  defp encode_value(:set, %MapSet{} = _s), do: raise "TODO"
+  defp encode_value({:set, type}, s) do
+    s = if is_struct(s, MapSet), do: s, else: Enum.into(s, MapSet.new)
+    [
+      int(MapSet.size(s)),
+      Enum.map(s, fn v -> encode_value(type, v) |> bytes() end)
+    ]
+  end
 
   defp encode_value(:smallint, n) when is_integer(n), do: <<n::integer-16>>
 
@@ -256,7 +311,18 @@ defmodule Cassandra.Frame.Data do
 
   defp encode_value(:tinyint, n) when is_integer(n), do: <<n::integer-8>>
 
-  defp encode_value(:tuple, _t), do: raise "TODO"
+  defp encode_value({:tuple, types}, t) do
+    values = case t do
+      t when is_tuple(t) -> Tuple.to_list(t)
+      l when is_list(l) -> l
+      e -> Enum.into(e, [])
+    end
+
+    Enum.zip(types, values)
+    |> Enum.map(fn {type, value} ->
+      bytes(encode_value(type, value))
+    end)
+  end
 
   defp encode_value(:uuid, b) when is_binary(b) do
     case byte_size(b) do
@@ -278,6 +344,12 @@ defmodule Cassandra.Frame.Data do
   defp encode_value(:varint, n) when is_integer(n) do
     size = varint_byte_size(n) * 8
     <<n::size(size)>>
+  end
+
+  # TODO catch this somehow and surface to user. Current this
+  # crashes the connection and the client restarts it.
+  defp encode_value(type, _value) do
+    raise ArgumentError, "unrecognized CQL type '#{type}'"
   end
 
   defp varint_byte_size(value) when value > 127 do
@@ -304,6 +376,28 @@ defmodule Cassandra.Frame.Data do
 
   defp decode_value(type, data) when type in [:text, :ascii, :blob, :varchar], do: data
 
+  defp decode_value({:list, type}, data) do
+    {n, data} = read_int(data)
+    {list, ""} = Enum.reduce(1..n, {[], data}, fn _, {list, data} ->
+      {bytes, data} = read_bytes(data)
+      value = decode_value(type, bytes)
+      {[value | list], data}
+    end)
+    Enum.reverse(list)
+  end
+
+  defp decode_value({:map, ktype, vtype}, data) do
+    {n, data} = read_int(data)
+    {map, ""} = Enum.reduce(1..n, {%{}, data}, fn _, {map, data} ->
+      {bytes, data} = read_bytes(data)
+      k = decode_value(ktype, bytes)
+      {bytes, data} = read_bytes(data)
+      v = decode_value(vtype, bytes)
+      {Map.put(map, k, v), data}
+    end)
+    map
+  end
+
   defp decode_value({:set, type}, data) do
     {n, data} = read_int(data)
     {set, ""} = Enum.reduce(1..n, {MapSet.new(), data}, fn _, {set, data} ->
@@ -312,6 +406,15 @@ defmodule Cassandra.Frame.Data do
       {MapSet.put(set, value), data}
     end)
     set
+  end
+
+  defp decode_value({:tuple, types}, data) do
+    {acc, ""} = Enum.reduce(types, {[], data}, fn type, {acc, data} ->
+      {bytes, data} = read_bytes(data)
+      value = decode_value(type, bytes)
+      {[value | acc], data}
+    end)
+    acc |> Enum.reverse() |> List.to_tuple()
   end
 
   defp decode_value(type, data) when type in [:uuid, :timeuuid] do

@@ -142,6 +142,9 @@ defmodule Cassandra.Frame.Result do
       0x0012 -> {:time, data}
       0x0013 -> {:smallint, data}
       0x0014 -> {:tinyint, data}
+      0x0020 ->
+        {type, data} = read_option(data)
+        {{:list, type}, data}
       0x0021 ->
         {ktype, data} = read_option(data)
         {vtype, data} = read_option(data)
@@ -149,6 +152,13 @@ defmodule Cassandra.Frame.Result do
       0x0022 ->
         {type, data} = read_option(data)
         {{:set, type}, data}
+      0x0031 ->
+        {n, data} = read_short(data)
+        {types, data} = Enum.reduce(1..n, {[], data}, fn _, {types, data} ->
+          {type, data} = read_option(data)
+          {[type | types], data}
+        end)
+        {{:tuple, Enum.reverse(types)}, data}
       _ ->
         id = Base.encode16(<<id::integer-16>>, case: :lower)
         raise "result option not implemented for 0x#{id}"

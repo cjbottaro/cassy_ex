@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+
+docker attach cassandra_ex-elixir-1
