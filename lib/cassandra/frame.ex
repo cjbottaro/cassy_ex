@@ -1,5 +1,7 @@
 defmodule Cassandra.Frame do
-  alias Cassandra.Frame
+  alias Cassandra.{Frame, Error}
+
+  @type t :: struct
 
   defmacro __using__(_opts \\ []) do
     quote do
@@ -14,17 +16,27 @@ defmodule Cassandra.Frame do
     end
   end
 
-  def to_iodata(frame, header \\ []) do
+  @spec build(module, non_neg_integer, Keyword.t, non_neg_integer) :: {:ok, t} | {:error, binary}
+
+  def build(mod, stream, fields \\ [], flags \\ 0) do
+    header = %Frame.Header{opcode: mod.opcode, stream: stream, flags: flags}
+    try do
+      {:ok, struct!(mod, Keyword.put(fields, :header, header))}
+    rescue
+      e in KeyError -> {:error, "invalid field :#{e.key}"}
+    end
+  end
+
+  @spec to_iodata(t) :: {:ok, iolist} | {:error, Error.t}
+
+  def to_iodata(frame) do
     body = frame.__struct__.to_iodata(frame)
-
-    header = header
-    |> Keyword.put(:opcode, frame.__struct__.opcode())
-    |> Keyword.put(:length, IO.iodata_length(body))
-
-    header = struct!(Frame.Header, header)
+    header = %{frame.header | length: IO.iodata_length(body)}
     |> Frame.Header.to_iodata()
 
-    [header, body]
+    {:ok, [header, body]}
+  rescue
+    e in Frame.Data.Error -> {:error, e.message}
   end
 
   def from_binary(header, data) do
@@ -34,7 +46,7 @@ defmodule Cassandra.Frame do
       :result -> Frame.Result.from_binary(data)
     end
 
-    {:ok, frame}
+    {:ok, %{frame | header: header}}
   end
 
 end

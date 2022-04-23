@@ -124,14 +124,17 @@ defmodule CassandraTest do
 
   end
 
-  # test "bad type", %{conn: conn} do
-  #   {:error, error} = Connection.execute(conn,
-  #     "insert into test.collections (id, m) values (?, ?)",
-  #     values: [
-  #       {:int, 1},
-  #       {{:map, :short, :text}, %{1 => "one"}}
-  #     ]
-  #   )
-  # end
+  test "bad type", %{conn: conn} do
+    {:error, error} = Connection.execute(conn,
+      "insert into test.collections (id, m) values (?, ?)",
+      values: [
+        {:int, 1},
+        {{:map, :short, :text}, %{1 => "one"}}
+      ]
+    )
+    assert error.message == "unrecognized CQL type 'short'"
+    assert error.type == :client_library
+    assert error.code == -1
+  end
 
 end

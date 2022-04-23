@@ -6,18 +6,23 @@ defmodule Cassandra.Connection do
   @type t :: GenServer.server()
 
   def execute(conn, cql, opts \\ []) do
-    opts = Keyword.put_new(opts, :consistency, :quorum)
+    opts = opts
+    |> Keyword.put(:query, cql)
+    |> Keyword.put_new(:consistency, :quorum)
 
-    frame = %Frame.Query{ query: cql }
-    |> struct!(opts)
+    {_time, stream} = :timer.tc fn -> Connection.call(conn, :next_stream) end
 
-    with {:ok, header, data} <- Connection.call(conn, {:query, frame}),
+    with {:ok, frame} <- Frame.build(Frame.Query, stream, opts),
+      {:ok, iodata} <- Frame.to_iodata(frame),
+      {:ok, header, data} <- Connection.call(conn, {:send, stream, iodata}),
       {:ok, frame} <- Frame.from_binary(header, data)
     do
       case frame do
         %Frame.Result{} -> {:ok, Result.from_frame(frame)}
         %Frame.Error{} -> {:error, Error.from_frame(frame)}
       end
+    else
+      {:error, reason} -> {:error, Error.from_reason(reason)}
     end
   end
 
@@ -58,14 +63,16 @@ defmodule Cassandra.Connection do
     establish_connection(state)
   end
 
+  def handle_call(:next_stream, _from, %{stream: stream} = state) do
+    {:reply, stream, %{state | stream: stream + 1}}
+  end
+
   def handle_call(_args, _from, state) when not state.connected do
     {:reply, {:error, :not_connected}, state}
   end
 
-  def handle_call({:query, frame}, from, state) do
-    {stream, state} = get_stream(state)
-
-    case send_frame(state.socket, frame, stream: stream) do
+  def handle_call({:send, stream, iodata}, from, state) do
+    case :gen_tcp.send(state.socket, iodata) do
       :ok -> {:noreply, %{state | waiters: Map.put(state.waiters, stream, from)}}
       error -> {:reply, error, state}
     end
@@ -115,8 +122,10 @@ defmodule Cassandra.Connection do
     opts = [:binary, active: false]
 
     with {:ok, socket} <- :gen_tcp.connect(host, port, opts, 5_000), # TODO not hardcode
-      :ok <- send_frame(socket, %Frame.Startup{}),
-      {:ok, header, data} <- recv_frame(socket),
+      {:ok, frame} <- Frame.build(Frame.Startup, 0),
+      {:ok, iodata} <- Frame.to_iodata(frame),
+      :ok <- :gen_tcp.send(socket, iodata),
+      {:ok, header, data} <- recv_frame_data(socket),
       {:ok, %Frame.Ready{}} <- Frame.from_binary(header, data),
       :ok <- :inet.setopts(socket, [active: :once])
     do
@@ -133,17 +142,7 @@ defmodule Cassandra.Connection do
     end
   end
 
-  defp get_stream(state) do
-    stream = state.stream
-    {stream, %{state | stream: stream + 1}}
-  end
-
-  defp send_frame(socket, frame, header \\ []) do
-    data = Frame.to_iodata(frame, header)
-    :gen_tcp.send(socket, data)
-  end
-
-  defp recv_frame(socket) do
+  defp recv_frame_data(socket) do
     with {:ok, header} <- :gen_tcp.recv(socket, 9),
       {:ok, header} <- Frame.Header.from_binary(header),
       {:ok, body} <- recv_body(socket, header.length)

@@ -4,6 +4,7 @@ defmodule Cassandra.Frame.Query do
   @opcode :query
 
   defstruct [
+    :header,
     :query,
     :consistency,
     :no_metadata,

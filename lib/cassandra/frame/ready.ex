@@ -3,7 +3,7 @@ defmodule Cassandra.Frame.Ready do
 
   @opcode :ready
 
-  defstruct []
+  defstruct [:header]
 
   def from_binary("") do
     %__MODULE__{}

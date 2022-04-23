@@ -3,7 +3,7 @@ defmodule Cassandra.Frame.Error do
 
   @opcode :error
 
-  defstruct [:code, :msg]
+  defstruct [:header, :code, :msg]
 
   def from_binary(data) do
     {code, data} = read_int(data)

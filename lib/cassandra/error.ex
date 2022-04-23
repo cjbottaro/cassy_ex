@@ -1,11 +1,19 @@
 defmodule Cassandra.Error do
-  defstruct [:type, :code, :msg, extra: %{}]
+  defexception [:type, :code, :message, extra: %{}]
 
   def from_frame(frame) do
     %__MODULE__{
       type: type(frame.code),
       code: frame.code,
-      msg: frame.msg
+      message: frame.msg
+    }
+  end
+
+  def from_reason(reason) do
+    %__MODULE__{
+      type: :client_library,
+      code: -0x0001,
+      message: to_string(reason)
     }
   end
 

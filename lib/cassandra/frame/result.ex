@@ -4,6 +4,7 @@ defmodule Cassandra.Frame.Result do
   @opcode :result
 
   defstruct [
+    :header,
     :kind,
     :flags,
     :paging_state,

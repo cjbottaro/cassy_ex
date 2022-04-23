@@ -1,5 +1,9 @@
 defmodule Cassandra.Frame.Data do
 
+  defmodule Error do
+    defexception [:message]
+  end
+
   [
     {:request,  0x04},
     {:response, 0x84}
@@ -349,7 +353,7 @@ defmodule Cassandra.Frame.Data do
   # TODO catch this somehow and surface to user. Current this
   # crashes the connection and the client restarts it.
   defp encode_value(type, _value) do
-    raise ArgumentError, "unrecognized CQL type '#{type}'"
+    raise Error, "unrecognized CQL type '#{type}'"
   end
 
   defp varint_byte_size(value) when value > 127 do

@@ -4,6 +4,7 @@ defmodule Cassandra.Frame.Startup do
   @opcode :startup
 
   defstruct [
+    header: nil,
     compression: nil,
     no_compact: nil,
     throw_on_overload: nil
