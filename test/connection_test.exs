@@ -1,6 +1,6 @@
 defmodule CassandraTest do
   use ExUnit.Case
-  alias Cassandra.{Connection, Result}
+  alias Cassandra.{Connection, Result, Utils}
   doctest Connection
 
   setup_all do
@@ -33,7 +33,7 @@ defmodule CassandraTest do
     """)
     {:ok, _} = Connection.execute(conn, """
       CREATE TABLE IF NOT EXISTS test.collections (
-        id INT PRIMARY KEY,
+        id UUID PRIMARY KEY,
         m MAP<int,text>,
         s set<int>,
         l list<text>,
@@ -55,9 +55,11 @@ defmodule CassandraTest do
   describe "collections" do
 
     test "literals", %{conn: conn} do
+      id = Utils.uuid()
+
       {:ok, %Result{}} = Connection.execute(conn, """
         insert into test.collections (id, m, s, l, t) values (
-          1,
+          #{id},
           { 1 : 'one' },
           {1, 2, 3, 3},
           ['one', 'one', 'two'],
@@ -66,10 +68,10 @@ defmodule CassandraTest do
       """)
 
       {:ok, %Result{rows: [row]}} = Connection.execute(conn,
-        "select * from test.collections where id = 1"
+        "select * from test.collections where id = #{id}"
       )
 
-      assert row["id"] == 1
+      assert row["id"] == id
       assert row["m"] == %{ 1 => "one" }
       assert row["s"] == MapSet.new([1, 2, 3])
       assert row["l"] == ["one", "one", "two"]
@@ -77,10 +79,12 @@ defmodule CassandraTest do
     end
 
     test "positional", %{conn: conn} do
+      id = Utils.uuid()
+
       {:ok, %Result{}} = Connection.execute(conn,
         "insert into test.collections (id, m, s, l, t) values (?, ?, ?, ?, ?)",
         values: [
-          1,
+          id,
           %{1 => "one"},
           MapSet.new([1, 2, 3, 3]),
           ["one", "one", "two"],
@@ -89,10 +93,10 @@ defmodule CassandraTest do
       )
 
       {:ok, %Result{rows: [row]}} = Connection.execute(conn,
-        "select * from test.collections where id = 1"
+        "select * from test.collections where id = #{id}"
       )
 
-      assert row["id"] == 1
+      assert row["id"] == id
       assert row["m"] == %{ 1 => "one" }
       assert row["s"] == MapSet.new([1, 2, 3])
       assert row["l"] == ["one", "one", "two"]
@@ -100,10 +104,12 @@ defmodule CassandraTest do
     end
 
     test "named", %{conn: conn} do
+      id = Utils.uuid()
+
       {:ok, %Result{}} = Connection.execute(conn,
         "insert into test.collections (id, m, s, l, t) values (:id, :m, :s, :l, :t)",
         values: %{
-          id: 1,
+          id: id,
           m: %{1 => "one"},
           s: MapSet.new([1, 2, 3, 3]),
           l: ["one", "one", "two"],
@@ -112,10 +118,42 @@ defmodule CassandraTest do
       )
 
       {:ok, %Result{rows: [row]}} = Connection.execute(conn,
-        "select * from test.collections where id = 1"
+        "select * from test.collections where id = #{id}"
       )
 
-      assert row["id"] == 1
+      assert row["id"] == id
+      assert row["m"] == %{ 1 => "one" }
+      assert row["s"] == MapSet.new([1, 2, 3])
+      assert row["l"] == ["one", "one", "two"]
+      assert row["t"] == {1, "one", "ab9dcec9-2877-46d9-9e63-be00a94ac900"}
+    end
+
+  end
+
+  describe "prepared" do
+
+    test "basic", %{conn: conn} do
+      id = Utils.uuid()
+
+      {:ok, prepared} = Connection.prepare(conn,
+        "insert into test.collections (id, m, s, l, t) values (?, ?, ?, ?, ?)"
+      )
+
+      {:ok, %{kind: :void}} = Connection.execute(conn, prepared,
+        values: [
+          id,
+          %{1 => "one"},
+          MapSet.new([1, 2, 3, 3]),
+          ["one", "one", "two"],
+          {1, "one", "ab9dcec9-2877-46d9-9e63-be00a94ac900"}
+        ]
+      )
+
+      {:ok, %Result{rows: [row]}} = Connection.execute(conn,
+        "select * from test.collections where id = #{id}"
+      )
+
+      assert row["id"] == id
       assert row["m"] == %{ 1 => "one" }
       assert row["s"] == MapSet.new([1, 2, 3])
       assert row["l"] == ["one", "one", "two"]

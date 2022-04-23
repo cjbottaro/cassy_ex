@@ -5,16 +5,68 @@ defmodule Cassandra.Connection do
 
   @type t :: GenServer.server()
 
+  @spec prepare(t, binary, Keyword.t) :: {:ok, Result.t} | {:error, Error.t}
+
+  def prepare(conn, cql, opts \\ []) when is_binary(cql) do
+    sha = :crypto.hash(:sha, cql)
+
+    # Small race condition here between fetch_prepared and cache_prepared,
+    # but it doesn't matter, at worst a query will be prepared twice.
+
+    case Connection.call(conn, {:fetch_prepared, sha}) do
+      nil ->
+        opts = Keyword.put(opts, :cql, cql)
+        with {:ok, result} <- request(conn, Frame.Prepare, opts) do
+          Connection.cast(conn, {:cache_prepared, sha, result.query_id})
+          {:ok, result}
+        end
+
+      query_id -> %Result{kind: :prepared, query_id: query_id}
+    end
+  end
+
+  @spec prepare!(t, binary, Keyword.t) :: Result.t | no_return
+
+  def prepare!(conn, cql, opts \\ []) when is_binary(cql) do
+    case prepare(conn, cql, opts) do
+      {:ok, result} -> result
+      {:error, error} -> raise error
+    end
+  end
+
   @spec execute(t, binary, Keyword.t) :: {:ok, Result.t} | {:error, Error.t}
 
-  def execute(conn, cql, opts \\ []) do
+  def execute(conn, cql_or_prepared, opts \\ [])
+
+  def execute(conn, cql, opts) when is_binary(cql) do
     opts = opts
     |> Keyword.put(:query, cql)
     |> Keyword.put_new(:consistency, :quorum)
 
+    request(conn, Frame.Query, opts)
+  end
+
+  def execute(conn, %Result{kind: :prepared, query_id: query_id}, opts) when is_binary(query_id) do
+    opts = opts
+    |> Keyword.put(:query_id, query_id)
+    |> Keyword.put_new(:consistency, :quorum)
+
+    request(conn, Frame.Execute, opts)
+  end
+
+  @spec execute!(t, binary, Keyword.t) :: Result.t | no_return
+
+  def execute!(conn, cql, opts \\ []) do
+    case execute(conn, cql, opts) do
+      {:ok, result} -> result
+      {:error, error} -> raise error
+    end
+  end
+
+  defp request(conn, mod, opts) do
     {_time, stream} = :timer.tc fn -> Connection.call(conn, :next_stream) end
 
-    with {:ok, frame} <- Frame.build(Frame.Query, stream, opts),
+    with {:ok, frame} <- Frame.build(mod, stream, opts),
       {:ok, iodata} <- Frame.to_iodata(frame),
       {:ok, header, data} <- Connection.call(conn, {:send, stream, iodata}),
       {:ok, frame} <- Frame.from_binary(header, data)
@@ -25,15 +77,6 @@ defmodule Cassandra.Connection do
       end
     else
       {:error, reason} -> {:error, Error.from_reason(reason)}
-    end
-  end
-
-  @spec execute!(t, binary, Keyword.t) :: Result.t | no_return
-
-  def execute!(conn, cql, opts \\ []) do
-    case execute(conn, cql, opts) do
-      {:ok, result} -> result
-      {:error, error} -> raise error
     end
   end
 
@@ -65,7 +108,8 @@ defmodule Cassandra.Connection do
       connected: false,
       stream: 0,
       waiters: %{},
-      buffer: ""
+      buffer: "",
+      prepared: %{}
     }
 
     if config[:async_connect] do
@@ -92,6 +136,14 @@ defmodule Cassandra.Connection do
       :ok -> {:noreply, %{state | waiters: Map.put(state.waiters, stream, from)}}
       error -> {:reply, error, state}
     end
+  end
+
+  def handle_call({:fetch_prepared, sha}, _from, state) when is_binary(sha) do
+    {:reply, state.prepared[sha], state}
+  end
+
+  def handle_cast({:cache_prepared, sha, query_id}, state) when is_binary(sha) and is_binary(query_id) do
+    {:noreply, %{state | prepared: Map.put(state.prepared, sha, query_id)}}
   end
 
   # Can this even happen?
@@ -123,7 +175,6 @@ defmodule Cassandra.Connection do
     end
 
     {from, waiters} = Map.pop!(state.waiters, header.stream)
-
     :ok = Connection.reply(from, {:ok, header, body})
 
     :ok = :inet.setopts(socket, [active: :once])

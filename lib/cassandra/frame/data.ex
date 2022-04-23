@@ -86,6 +86,10 @@ defmodule Cassandra.Frame.Data do
     [int(byte_size(b)), b]
   end
 
+  def short_bytes(b) do
+    [short(byte_size(b)), b]
+  end
+
   def long_string(s) do
     [int(byte_size(s)), s]
   end
@@ -164,6 +168,12 @@ defmodule Cassandra.Frame.Data do
       <<s::binary-size(n), data::binary>> = data
       {s, data}
     end
+  end
+
+  def read_short_bytes(data) do
+    {n, data} = read_short(data)
+    <<s::binary-size(n), data::binary>> = data
+    {s, data}
   end
 
   def read_string_map(data) do

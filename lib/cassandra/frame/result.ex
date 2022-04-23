@@ -13,8 +13,19 @@ defmodule Cassandra.Frame.Result do
     :columns,
     :row_count,
     :rows,
-    :schema_change
+    :schema_change,
+    :query_id,
+    :pk_index
   ]
+
+  [
+    {:void,           0x0001},
+    {:rows,           0x0002},
+    {:set_keyspace,   0x0003},
+    {:prepared,       0x0004},
+    {:schema_change,  0x0005}
+  ] |> Enum.each(fn {name, value} -> defp kind(unquote(value)), do: unquote(name) end)
+
 
   def from_binary(data) do
     {kind, data} = read_int(data)
@@ -107,8 +118,32 @@ defmodule Cassandra.Frame.Result do
     %{frame | keyspace: keyspace}
   end
 
-  defp from_binary(%{kind: :prepared} = _frame, _data) do
-    raise "not implemented yet"
+  defp from_binary(%{kind: :prepared} = frame, data) do
+    use Bitwise
+
+    {query_id, data} = read_short_bytes(data)
+    {flags, data} = read_int(data)
+    {col_count, data} = read_int(data)
+    {pk_count, data} = read_int(data)
+    {pk_index, data} = if pk_count > 0 do
+      {pk_index, data} = Enum.reduce(1..pk_count, {[], data}, fn _, {pk_index, data} ->
+        {n, data} = read_short(data)
+        {[n | pk_index], data}
+      end)
+      {Enum.reverse(pk_index), data}
+    else
+      {[], data}
+    end
+    {keyspace, table, columns, _data} = read_col_specs(col_count, flags, data)
+
+    %{frame |
+      flags: flags,
+      keyspace: keyspace,
+      table: table,
+      columns: columns,
+      pk_index: pk_index,
+      query_id: query_id,
+    }
   end
 
   defp from_binary(%{kind: :schema_change} = frame, data) do
@@ -166,15 +201,45 @@ defmodule Cassandra.Frame.Result do
     end
   end
 
-  [
-    {:void,           0x0001},
-    {:rows,           0x0002},
-    {:set_keyspace,   0x0003},
-    {:prepared,       0x0004},
-    {:schema_change,  0x0005}
-  ]
-  |> Enum.each(fn {name, value} ->
-    defp kind(unquote(value)), do: unquote(name)
-  end)
+  # Reads [<global_table_spec>?<col_spec_1>...<col_spec_n>] from both rows and
+  # prepared results.
+  defp read_col_specs(0, _flags, data), do: {nil, nil, [], data}
+  defp read_col_specs(col_count, flags, data) do
+    use Bitwise
+
+    {keyspace, table, data} = if (flags &&& 0x0001) != 0 do
+      {keyspace, data} = read_string(data)
+      {table, data} = read_string(data)
+      {keyspace, table, data}
+    else
+      {nil, nil, data}
+    end
+
+    {columns, data} = if (flags &&& 0x0001) == 0 do
+      Enum.reduce(1..col_count, {[], data}, fn _, {columns, data} ->
+        {keyspace, data} = read_string(data)
+        {table, data} = read_string(data)
+        {name, data} = read_string(data)
+        {type, data} = read_option(data)
+
+        {
+          [{keyspace, table, name, type} | columns],
+          data
+        }
+      end)
+    else
+      Enum.reduce(1..col_count, {[], data}, fn _, {columns, data} ->
+        {name, data} = read_string(data)
+        {type, data} = read_option(data)
+
+        {
+          [{keyspace, table, name, type} | columns],
+          data
+        }
+      end)
+    end
+
+    {keyspace, table, columns, data}
+  end
 
 end

@@ -16,7 +16,14 @@ defmodule Cassandra.Frame.Query do
   ]
 
   def to_iodata(frame) do
-    use Bitwise
+    [
+      long_string(frame.query),
+      query_params_iodata(frame)
+    ]
+  end
+
+  def query_params_iodata(frame) do
+        use Bitwise
 
     flags = 0
     iodata = []
@@ -43,7 +50,6 @@ defmodule Cassandra.Frame.Query do
 
     {flags, iodata} = if frame.page_size do
       {flags ||| 0x04, [iodata, int(frame.page_size)]}
-      |> IO.inspect
     else
       {flags, iodata}
     end
@@ -67,7 +73,6 @@ defmodule Cassandra.Frame.Query do
     end
 
     [
-      long_string(frame.query),
       consistency(frame.consistency),
       byte(flags),
       iodata
