@@ -304,6 +304,16 @@ defmodule Cassandra.Frame.Data do
 
   defp decode_value(type, data) when type in [:text, :ascii, :blob, :varchar], do: data
 
+  defp decode_value({:set, type}, data) do
+    {n, data} = read_int(data)
+    {set, ""} = Enum.reduce(1..n, {MapSet.new(), data}, fn _, {set, data} ->
+      {bytes, data} = read_bytes(data)
+      value = decode_value(type, bytes)
+      {MapSet.put(set, value), data}
+    end)
+    set
+  end
+
   defp decode_value(type, data) when type in [:uuid, :timeuuid] do
     <<a::4-bytes, b::2-bytes, c::2-bytes, d::2-bytes, e::6-bytes>> = data
     a = Base.encode16(a, case: :lower)

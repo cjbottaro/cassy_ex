@@ -1,8 +1,11 @@
 defmodule Cassandra.Connection do
   use Connection
+  require Logger
   alias Cassandra.{Frame, Result, Error}
 
-  def query(conn, cql, opts \\ []) do
+  @type t :: GenServer.server()
+
+  def execute(conn, cql, opts \\ []) do
     consistency = Keyword.get(opts, :consistency, :quorum)
 
     frame = %Frame.Query{
@@ -21,9 +24,18 @@ defmodule Cassandra.Connection do
     end
   end
 
+  def start(config \\ []) do
+    {opts, config} = Keyword.split(config, [:name])
+    Connection.start(__MODULE__, config, opts)
+  end
+
   def start_link(config \\ []) do
     {opts, config} = Keyword.split(config, [:name])
     Connection.start_link(__MODULE__, config, opts)
+  end
+
+  def stop(conn) do
+    GenServer.stop(conn)
   end
 
   def init(config) do
@@ -38,7 +50,19 @@ defmodule Cassandra.Connection do
       buffer: ""
     }
 
+    if config[:async_connect] do
+      {:connect, :init, state}
+    else
+      establish_connection(state)
+    end
+  end
+
+  def connect(_info, state) do
     establish_connection(state)
+  end
+
+  def handle_call(_args, _from, state) when not state.connected do
+    {:reply, {:error, :not_connected}, state}
   end
 
   def handle_call({:query, frame}, from, state) do
@@ -93,15 +117,22 @@ defmodule Cassandra.Connection do
     port = String.to_integer(port)
     opts = [:binary, active: false]
 
-    with {:ok, socket} <- :gen_tcp.connect(host, port, opts),
+    with {:ok, socket} <- :gen_tcp.connect(host, port, opts, 5_000), # TODO not hardcode
       :ok <- send_frame(socket, %Frame.Startup{}),
       {:ok, header, data} <- recv_frame(socket),
       {:ok, %Frame.Ready{}} <- Frame.from_binary(header, data),
       :ok <- :inet.setopts(socket, [active: :once])
     do
-      IO.inspect :inet.peername(socket)
-      IO.inspect :inet.sockname(socket)
+      Logger.debug("Connection established to #{state.host}")
       {:ok, %{state | socket: socket, connected: true}}
+    else
+      {:ok, %Frame.Error{msg: msg}} ->
+        Logger.error("Connection to #{state.host} failed: #{msg}")
+        {:backoff, 2_000, state}
+
+      {:error, reason} ->
+        Logger.error("Connection to #{state.host} failed: #{reason}")
+        {:backoff, 2_000, state}
     end
   end
 
@@ -110,12 +141,12 @@ defmodule Cassandra.Connection do
     {stream, %{state | stream: stream + 1}}
   end
 
-  def send_frame(socket, frame, header \\ []) do
+  defp send_frame(socket, frame, header \\ []) do
     data = Frame.to_iodata(frame, header)
     :gen_tcp.send(socket, data)
   end
 
-  def recv_frame(socket) do
+  defp recv_frame(socket) do
     with {:ok, header} <- :gen_tcp.recv(socket, 9),
       {:ok, header} <- Frame.Header.from_binary(header),
       {:ok, body} <- recv_body(socket, header.length)

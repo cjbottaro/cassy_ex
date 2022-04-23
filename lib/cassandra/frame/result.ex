@@ -68,22 +68,27 @@ defmodule Cassandra.Frame.Result do
       end)
     end
 
-    columns = List.to_tuple(columns)
-
     {row_count, data} = read_int(data)
 
-    # Careful here... the columns are in reverse order due to using reduce,
-    # hence why we count down from columns_count-1 to 0.
+    {columns, rows} = if row_count > 0 do
+      # Careful here... the columns are in reverse order due to using reduce,
+      # hence why we count down from columns_count-1 to 0.
 
-    {rows, _data} = Enum.reduce(0..row_count-1, {[], data}, fn _, {rows, data} ->
-      {row, data} = Enum.reduce(col_count-1..0, {[], data}, fn i, {row, data} ->
-        {_keyspace, _table, _name, type} = elem(columns, i)
-        {value, data} = read_value(type, data)
-        {[value | row], data}
+      columns = List.to_tuple(columns)
+      {rows, _data} = Enum.reduce(0..row_count-1, {[], data}, fn _, {rows, data} ->
+        {row, data} = Enum.reduce(col_count-1..0, {[], data}, fn i, {row, data} ->
+          {_keyspace, _table, _name, type} = elem(columns, i)
+          {value, data} = read_value(type, data)
+          {[value | row], data}
+        end)
+
+        {[row | rows], data}
       end)
 
-      {[row | rows], data}
-    end)
+      {columns, rows}
+    else
+      {columns, []}
+    end
 
     %{frame |
       flags: flags,
@@ -137,6 +142,16 @@ defmodule Cassandra.Frame.Result do
       0x0012 -> {:time, data}
       0x0013 -> {:smallint, data}
       0x0014 -> {:tinyint, data}
+      0x0021 ->
+        {ktype, data} = read_option(data)
+        {vtype, data} = read_option(data)
+        {{:map, ktype, vtype}, data}
+      0x0022 ->
+        {type, data} = read_option(data)
+        {{:set, type}, data}
+      _ ->
+        id = Base.encode16(<<id::integer-16>>, case: :lower)
+        raise "result option not implemented for 0x#{id}"
     end
   end
 
