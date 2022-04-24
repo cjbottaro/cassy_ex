@@ -1,4 +1,5 @@
 defmodule Cassandra.Frame.Header do
+  @moduledoc false
   import Cassandra.Frame.Data
 
   defstruct [

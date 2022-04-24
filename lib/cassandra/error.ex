@@ -1,5 +1,10 @@
 defmodule Cassandra.Error do
+  @moduledoc """
+  Client and server errors
+  """
   defexception [:type, :code, :message, extra: %{}]
+
+  @type t :: %__MODULE__{}
 
   def from_frame(frame) do
     %__MODULE__{

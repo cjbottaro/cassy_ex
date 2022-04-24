@@ -1,6 +1,8 @@
 defmodule Cassandra.Frame.Data do
+  @moduledoc false
 
   defmodule Error do
+    @moduledoc false
     defexception [:message]
   end
 

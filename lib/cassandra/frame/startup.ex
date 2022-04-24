@@ -1,4 +1,5 @@
 defmodule Cassandra.Frame.Startup do
+  @moduledoc false
   use Cassandra.Frame
 
   defstruct [

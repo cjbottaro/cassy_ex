@@ -1,5 +1,7 @@
 defmodule Cassandra.Frame do
-  alias Cassandra.{Frame, Error}
+  @moduledoc false
+
+  use Cassandra
 
   @type t :: struct
 

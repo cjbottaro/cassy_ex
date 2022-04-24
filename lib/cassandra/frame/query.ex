@@ -1,4 +1,5 @@
 defmodule Cassandra.Frame.Query do
+  @moduledoc false
   use Cassandra.Frame
 
   defstruct [

@@ -1,4 +1,9 @@
 defmodule Cassandra.Client do
+  @moduledoc """
+  Connect to a Cassandra cluster
+
+
+  """
   use GenServer
   use Cassandra
 

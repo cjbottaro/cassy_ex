@@ -1,4 +1,5 @@
 defmodule Cassandra.Frame.Error do
+  @moduledoc false
   use Cassandra.Frame
 
   defstruct [:header, :code, :msg]

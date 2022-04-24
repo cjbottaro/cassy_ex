@@ -1,6 +1,8 @@
 defmodule Cassandra.Result do
   alias Cassandra.Frame
 
+  @type t :: %__MODULE__{}
+
   defstruct [:kind, :rows, :count, :paging_state, :keyspace, :schema_change, :query_id]
 
   def from_frame(%Frame.Result{kind: :rows} = frame) do

@@ -1,4 +1,8 @@
 defmodule Cassandra.Connection do
+  @moduledoc """
+  Connect to a single Cassandra node
+
+  """
   use Connection
   use Cassandra
   alias Elixir.Connection

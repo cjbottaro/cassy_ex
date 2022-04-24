@@ -1,4 +1,5 @@
 defmodule Cassandra.Frame.Ready do
+  @moduledoc false
   use Cassandra.Frame
 
   defstruct [:header]

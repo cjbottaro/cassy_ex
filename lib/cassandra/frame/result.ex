@@ -1,4 +1,5 @@
 defmodule Cassandra.Frame.Result do
+  @moduledoc false
   use Cassandra.Frame
 
   defstruct [
