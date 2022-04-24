@@ -3,7 +3,7 @@ defmodule Cassandra.Result do
 
   @type t :: %__MODULE__{}
 
-  defstruct [:kind, :rows, :count, :paging_state, :keyspace, :schema_change, :query_id]
+  defstruct [:kind, :rows, :count, :paging_state, :keyspace, :schema_change, :query_id, :columns]
 
   def from_frame(%Frame.Result{kind: :rows} = frame) do
     %__MODULE__{
@@ -19,7 +19,8 @@ defmodule Cassandra.Result do
       kind: frame.kind,
       keyspace: frame.keyspace,
       schema_change: frame.schema_change,
-      query_id: frame.query_id
+      query_id: frame.query_id,
+      columns: frame.columns
     }
   end
 

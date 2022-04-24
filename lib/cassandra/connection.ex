@@ -52,9 +52,10 @@ defmodule Cassandra.Connection do
     request(conn, Frame.Query, opts)
   end
 
-  def execute(conn, %Result{kind: :prepared, query_id: query_id}, opts) when is_binary(query_id) do
+  def execute(conn, %Result{kind: :prepared, query_id: query_id, columns: columns}, opts) when is_binary(query_id) do
     opts = opts
     |> Keyword.put(:query_id, query_id)
+    |> Keyword.put(:columns, columns)
     |> Keyword.put_new(:consistency, :quorum)
 
     request(conn, Frame.Execute, opts)

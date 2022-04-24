@@ -12,6 +12,7 @@ defmodule Cassandra.Frame.Execute do
     :paging_state,
     :serial_consistency,
     :timestamp,
+    :columns
   ]
 
   def to_iodata(frame) do

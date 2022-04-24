@@ -41,6 +41,15 @@ defmodule CassandraTest do
       )
     """)
 
+    Connection.execute!(conn, "DROP TABLE IF EXISTS test.prepared")
+    Connection.execute!(conn, """
+      CREATE TABLE test.prepared (
+        id UUID PRIMARY KEY,
+        n SMALLINT,
+        s SET<SMALLINT>
+      )
+    """)
+
     Connection.execute!(conn, "DROP TABLE IF EXISTS test.paging")
     Connection.execute!(conn, """
       CREATE TABLE test.paging (
@@ -169,6 +178,36 @@ defmodule CassandraTest do
       assert row["t"] == {1, "one", "ab9dcec9-2877-46d9-9e63-be00a94ac900"}
     end
 
+    test "doesn't need type inference (positional)", %{conn: conn} do
+      id = uuid()
+
+      {:error, %{type: :invalid}} = Connection.execute(conn,
+        "insert into test.prepared (id, n, s) values (?, ?, ?)",
+        values: [id, 123, [1, 1, 2]]
+      )
+
+      stmt = Connection.prepare!(conn, "insert into test.prepared (id, n, s) values (?, ?, ?)")
+      Connection.execute!(conn, stmt, values: [id, 123, [1, 1, 2]])
+
+      %{rows: [row]} = Connection.execute!(conn, "select * from test.prepared where id = #{id}")
+      assert row == %{"id" => id, "n" => 123, "s" => MapSet.new([1, 2])}
+    end
+
+    test "doesn't need type inference (named)", %{conn: conn} do
+      id = uuid()
+
+      {:error, %{type: :invalid}} = Connection.execute(conn,
+        "insert into test.prepared (id, n, s) values (:id, :n, :s)",
+        values: %{id: id, n: 123, s: [1, 1, 2]}
+      )
+
+      stmt = Connection.prepare!(conn, "insert into test.prepared (id, n, s) values (:id, :n, :s)")
+      Connection.execute!(conn, stmt, values: %{id: id, n: 123, s: [1, 1, 2]})
+
+      %{rows: [row]} = Connection.execute!(conn, "select * from test.prepared where id = #{id}")
+      assert row == %{"id" => id, "n" => 123, "s" => MapSet.new([1, 2])}
+    end
+
   end
 
   describe "paging" do
@@ -207,8 +246,9 @@ defmodule CassandraTest do
         Connection.execute!(conn, "insert into test.paging (id, n) values (#{id}, #{n})")
       end)
 
+      stmt = Connection.prepare!(conn, "select n from test.paging where id = ?")
+
       {count1, values} = count_events([:test, :frame, :recv], fn ->
-        stmt = Connection.prepare!(conn, "select n from test.paging where id = ?")
         Connection.stream!(conn, stmt, values: [id], page_size: 2)
         |> Enum.map(& &1["n"])
       end)
@@ -217,7 +257,6 @@ defmodule CassandraTest do
       assert count1 >= 5
 
       {count2, values} = count_events([:test, :frame, :recv], fn ->
-        stmt = Connection.prepare!(conn, "select n from test.paging where id = ?")
         Connection.stream!(conn, stmt, values: [id], page_size: 2)
         |> Enum.take(5)
         |> Enum.map(& &1["n"])

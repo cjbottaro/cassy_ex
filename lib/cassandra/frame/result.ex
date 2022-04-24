@@ -47,37 +47,7 @@ defmodule Cassandra.Frame.Result do
       {nil, data}
     end
 
-    {keyspace, table, data} = if (flags &&& 0x0001) != 0 do
-      {keyspace, data} = read_string(data)
-      {table, data} = read_string(data)
-      {keyspace, table, data}
-    else
-      {nil, nil, data}
-    end
-
-    {columns, data} = if (flags &&& 0x0001) == 0 do
-      Enum.reduce(1..col_count, {[], data}, fn _, {columns, data} ->
-        {keyspace, data} = read_string(data)
-        {table, data} = read_string(data)
-        {name, data} = read_string(data)
-        {type, data} = read_option(data)
-
-        {
-          [{keyspace, table, name, type} | columns],
-          data
-        }
-      end)
-    else
-      Enum.reduce(1..col_count, {[], data}, fn _, {columns, data} ->
-        {name, data} = read_string(data)
-        {type, data} = read_option(data)
-
-        {
-          [{keyspace, table, name, type} | columns],
-          data
-        }
-      end)
-    end
+    {keyspace, table, columns, data} = read_col_specs(col_count, flags, data)
 
     {row_count, data} = read_int(data)
 
