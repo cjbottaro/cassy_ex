@@ -8,6 +8,7 @@ defmodule Cassandra.Frame do
   defmacro __using__(opts \\ []) do
     opcode = opts[:opcode]
     quote do
+      use Cassandra
       import Cassandra.Frame.Data
 
       if unquote(opcode) do

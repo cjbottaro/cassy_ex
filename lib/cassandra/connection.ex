@@ -21,13 +21,16 @@ defmodule Cassandra.Connection do
 
     case Connection.call(conn, {:fetch_prepared, sha}) do
       nil ->
+        if_test do: :telemetry.execute([:test, :fetch_prepared, :miss], %{})
         opts = Keyword.put(opts, :cql, cql)
         with {:ok, result} <- request(conn, Frame.Prepare, opts) do
           Connection.cast(conn, {:cache_prepared, sha, result.query_id})
           {:ok, result}
         end
 
-      query_id -> {:ok, %Result{kind: :prepared, query_id: query_id}}
+      query_id ->
+        if_test do: :telemetry.execute([:test, :fetch_prepared, :hit], %{})
+        {:ok, %Result{kind: :prepared, query_id: query_id}}
     end
   end
 

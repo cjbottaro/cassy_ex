@@ -150,32 +150,48 @@ defmodule CassandraTest do
 
   describe "prepared" do
 
-    test "basic", %{conn: conn} do
+    test "caching", %{conn: conn} do
       id = uuid()
 
-      {:ok, prepared} = Connection.prepare(conn,
-        "insert into test.collections (id, m, s, l, t) values (?, ?, ?, ?, ?)"
-      )
+      test = fn stmt ->
+        %{kind: :void} = Connection.execute!(conn, stmt,
+          values: [
+            id,
+            %{1 => "one"},
+            MapSet.new([1, 2, 3, 3]),
+            ["one", "one", "two"],
+            {1, "one", "ab9dcec9-2877-46d9-9e63-be00a94ac900"}
+          ]
+        )
 
-      {:ok, %{kind: :void}} = Connection.execute(conn, prepared,
-        values: [
-          id,
-          %{1 => "one"},
-          MapSet.new([1, 2, 3, 3]),
-          ["one", "one", "two"],
-          {1, "one", "ab9dcec9-2877-46d9-9e63-be00a94ac900"}
-        ]
-      )
+        %Result{rows: [row]} = Connection.execute!(conn,
+          "select * from test.collections where id = #{id}"
+        )
 
-      {:ok, %Result{rows: [row]}} = Connection.execute(conn,
-        "select * from test.collections where id = #{id}"
-      )
+        assert row["id"] == id
+        assert row["m"] == %{ 1 => "one" }
+        assert row["s"] == MapSet.new([1, 2, 3])
+        assert row["l"] == ["one", "one", "two"]
+        assert row["t"] == {1, "one", "ab9dcec9-2877-46d9-9e63-be00a94ac900"}
+      end
 
-      assert row["id"] == id
-      assert row["m"] == %{ 1 => "one" }
-      assert row["s"] == MapSet.new([1, 2, 3])
-      assert row["l"] == ["one", "one", "two"]
-      assert row["t"] == {1, "one", "ab9dcec9-2877-46d9-9e63-be00a94ac900"}
+      {miss_count, stmt} = count_events([:test, :fetch_prepared, :miss], fn ->
+        Connection.prepare!(conn,
+          "insert into test.collections (id, m, s, l, t) values (?, ?, ?, ?, ?)"
+        )
+      end)
+
+      assert miss_count == 1
+      test.(stmt)
+
+      {hit_count, stmt} = count_events([:test, :fetch_prepared, :hit], fn ->
+        Connection.prepare!(conn,
+          "insert into test.collections (id, m, s, l, t) values (?, ?, ?, ?, ?)"
+        )
+      end)
+
+      assert hit_count == 1
+      test.(stmt)
     end
 
     test "doesn't need type inference (positional)", %{conn: conn} do

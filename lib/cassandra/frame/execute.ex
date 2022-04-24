@@ -16,9 +16,10 @@ defmodule Cassandra.Frame.Execute do
   ]
 
   def to_iodata(frame) do
+    import Frame.Query, only: [query_params_iodata: 1]
     [
       short_bytes(frame.query_id),
-      Cassandra.Frame.Query.query_params_iodata(frame)
+      query_params_iodata(frame)
     ]
   end
 end
