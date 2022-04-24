@@ -8,6 +8,8 @@ defmodule Cassandra.Connection do
   alias Elixir.Connection
 
   @type t :: GenServer.server()
+  @type cql :: binary
+  @type prepared :: %Result{kind: :prepared}
 
   @spec prepare(t, binary, Keyword.t) :: {:ok, Result.t} | {:error, Error.t}
 
@@ -38,7 +40,7 @@ defmodule Cassandra.Connection do
     end
   end
 
-  @spec execute(t, binary, Keyword.t) :: {:ok, Result.t} | {:error, Error.t}
+  @spec execute(t, cql | prepared, Keyword.t) :: {:ok, Result.t} | {:error, Error.t}
 
   def execute(conn, cql_or_prepared, opts \\ [])
 
@@ -58,13 +60,34 @@ defmodule Cassandra.Connection do
     request(conn, Frame.Execute, opts)
   end
 
-  @spec execute!(t, binary, Keyword.t) :: Result.t | no_return
+  @spec execute!(t, cql | prepared, Keyword.t) :: Result.t | no_return
 
   def execute!(conn, cql, opts \\ []) do
     case execute(conn, cql, opts) do
       {:ok, result} -> result
       {:error, error} -> raise error
     end
+  end
+
+  @spec stream!(t, cql | prepared, Keyword.t) :: Enumerable.t | no_return
+
+  def stream!(conn, stmt, opts \\ []) do
+    Stream.resource(
+      fn -> execute!(conn, stmt, opts) end,
+
+      fn
+        %{kind: :rows, rows: [], paging_state: nil} ->
+          {:halt, nil}
+
+        %{kind: :rows, rows: rows, paging_state: nil} = result ->
+          {rows, %{result | rows: []}}
+
+        %{kind: :rows, rows: rows, paging_state: paging_state} ->
+          {rows, execute!(conn, stmt, Keyword.put(opts, :paging_state, paging_state))}
+      end,
+
+      fn _ -> nil end
+    )
   end
 
   defp request(conn, mod, opts) do
@@ -177,6 +200,8 @@ defmodule Cassandra.Connection do
         <<data::binary-size(body_size), buffer::binary>> = data
         {data, buffer}
     end
+
+    if_test do: :telemetry.execute([:test, :frame, :recv], %{})
 
     {from, waiters} = Map.pop!(state.waiters, header.stream)
     :ok = Connection.reply(from, {:ok, header, body})

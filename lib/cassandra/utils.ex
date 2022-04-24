@@ -12,4 +12,10 @@ defmodule Cassandra.Utils do
     "#{a}-#{b}-#{c}-#{d}-#{e}"
   end
 
+  defmacro if_test(do: block) do
+    if Mix.env() == :test do
+      quote do: unquote(block)
+    end
+  end
+
 end
