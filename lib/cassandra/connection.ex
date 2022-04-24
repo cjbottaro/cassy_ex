@@ -1,7 +1,7 @@
 defmodule Cassandra.Connection do
   use Connection
-  require Logger
-  alias Cassandra.{Frame, Result, Error}
+  use Cassandra
+  alias Elixir.Connection
 
   @type t :: GenServer.server()
 
@@ -21,7 +21,7 @@ defmodule Cassandra.Connection do
           {:ok, result}
         end
 
-      query_id -> %Result{kind: :prepared, query_id: query_id}
+      query_id -> {:ok, %Result{kind: :prepared, query_id: query_id}}
     end
   end
 

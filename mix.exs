@@ -24,6 +24,7 @@ defmodule CassandraEx.MixProject do
     [
       {:connection, "~> 1.0"},
       {:decimal, "~> 1.0 or ~> 2.0"},
+      {:ex_doc, "~> 0.28", only: :dev},
       {:httpoison, "~> 1.8", only: :test},
       {:jason, "~> 1.0", only: :test},
     ]

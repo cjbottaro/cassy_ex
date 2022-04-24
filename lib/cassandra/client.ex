@@ -1,21 +1,59 @@
 defmodule Cassandra.Client do
   use GenServer
-  require Logger
-  alias Cassandra.{Connection, Utils, Result, Error}
+  use Cassandra
+
+  @type t :: GenServer.server()
+  @type cql :: binary
+  @type prepared :: %Result{kind: :prepared}
 
   @doc false
   def debug(client) do
     GenServer.call(client, :debug)
   end
 
-  def execute(client, cql, opts \\ []) do
+  @spec execute(t, cql | prepared, Keyword.t) :: {:ok, Result.t} | {:error, Error.t}
+
+  def execute(client, cql_or_prepared, opts \\ []) do
+    with_connection(client, fn conn ->
+      Connection.execute(conn, cql_or_prepared, opts)
+    end)
+  end
+
+  @spec execute!(t, cql | prepared, Keyword.t) :: Result.t | no_return
+
+  def execute!(client, cql_or_prepared, opts \\ []) do
+    case execute(client, cql_or_prepared, opts) do
+      {:ok, result} -> result
+      {:error, error} -> raise error
+    end
+  end
+
+  @spec prepare(t, cql, Keyword.t) :: {:ok, prepared} | {:error, Error.t}
+
+  def prepare(client, cql, opts \\ []) do
+    with_connection(client, fn conn ->
+      Connection.prepare(conn, cql, opts)
+    end)
+  end
+
+  @spec prepare!(t, cql, Keyword.t) :: prepared | no_return
+
+  def prepare!(client, cql, opts \\ []) do
+    case prepare(client, cql, opts) do
+      {:ok, result} -> result
+      {:error, error} -> raise error
+    end
+  end
+
+  defp with_connection(client, f) do
+    error = Error.from_reason("no connections available")
+
     GenServer.call(client, :conns)
     |> Enum.shuffle()
-    |> Enum.reduce_while({:error, "no connections available"}, fn conn, _acc ->
-      case Connection.execute(conn, cql, opts) do
+    |> Enum.reduce_while({:error, error}, fn conn, _acc ->
+      case f.(conn) do
         {:ok, %Result{}} = result -> {:halt, result}
         {:error, %Error{}} = error -> {:halt, error}
-        error -> {:cont, error}
       end
     end)
   end
@@ -34,7 +72,7 @@ defmodule Cassandra.Client do
   def init(config) do
     state = %{
       config: config,
-      name: Utils.uuid,
+      name: uuid(),
       conns: [],
       pids: %{}
     }
@@ -51,7 +89,7 @@ defmodule Cassandra.Client do
           {:ok, state}
       end
     else
-      nodes = Map.new(config[:hosts], fn host -> {Utils.uuid, host} end)
+      nodes = Map.new(config[:hosts], fn host -> {uuid(), host} end)
       {:ok, connect_to_nodes(nodes, state)}
     end
   end
