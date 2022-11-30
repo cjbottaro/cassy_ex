@@ -1,4 +1,5 @@
 version: "3"
+name: cassandra-ex
 
 services:
 
@@ -13,15 +14,15 @@ services:
     stdin_open: true
     tty: true
     restart: always
-    depends_on:
-      - cassandra-ex-node-1
-      - cassandra-ex-node-2
-      - cassandra-ex-node-3
+    # depends_on:
+    #   - cassandra-ex-node-1
+    #   - cassandra-ex-node-2
+    #   - cassandra-ex-node-3
 
   node:
-    image: scylladb/scylla:4.6.2
+    image: scylladb/scylla:5.0.5
     restart: always
-    command: --seeds=cassandra_ex-node-1,cassandra_ex-node-2 --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0
+    command: --seeds=cassandra-ex-node-1,cassandra-ex-node-2 --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0
     ports:
       - 9042
     deploy:

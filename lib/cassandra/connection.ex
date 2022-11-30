@@ -139,7 +139,7 @@ defmodule Cassandra.Connection do
       connected: false,
       stream: 0,
       waiters: %{},
-      buffer: "",
+      buffer: [],
       prepared: %{}
     }
 
@@ -177,33 +177,35 @@ defmodule Cassandra.Connection do
     {:noreply, %{state | prepared: Map.put(state.prepared, sha, payload)}}
   end
 
-  # Can this even happen?
-  def handle_info({:tcp, _socket, data}, state) when byte_size(state.buffer) + byte_size(data) < 9 do
-    {:noreply, %{state | buffer: state.buffer <> data}}
-  end
+  @header_size 9
 
   def handle_info({:tcp, socket, data}, state) do
-    data = state.buffer <> data
+    buffer = [state.buffer, data]
 
-    <<header::9-bytes, data::binary>> = data
+    buffer_size = IO.iodata_length(buffer)
+
+    buffer = if buffer_size < @header_size do
+      {:ok, data} = :gen_tcp.recv(socket, @header_size - buffer_size)
+      [buffer, data]
+    else
+      buffer
+    end
+
+    <<header::9-bytes, buffer::binary>> = IO.iodata_to_binary(buffer)
     {:ok, header} = Frame.Header.from_binary(header)
+    buffer_size = byte_size(buffer)
     body_size = header.length
-    data_size = byte_size(data)
 
     # Our packet could be less than a frame... or more than a frame?
 
-    {body, buffer} = cond do
-      body_size > data_size ->
-        {:ok, more} = :gen_tcp.recv(socket, header.length - data_size)
-        {data <> more, ""}
-
-      body_size == data_size ->
-        {data, ""}
-
-      body_size < data_size ->
-        <<data::binary-size(body_size), buffer::binary>> = data
-        {data, buffer}
+    buffer = if buffer_size < body_size do
+      {:ok, data} = :gen_tcp.recv(socket, body_size - buffer_size)
+      [buffer, data]
+    else
+      buffer
     end
+
+    <<body::binary-size(body_size), buffer::binary>> = IO.iodata_to_binary(buffer)
 
     if_test do: :telemetry.execute([:test, :frame, :recv], %{})
 
@@ -213,6 +215,10 @@ defmodule Cassandra.Connection do
     :ok = :inet.setopts(socket, [active: :once])
 
     {:noreply, %{state | waiters: waiters, buffer: buffer}}
+  end
+
+  def handle_info({:tcp_closed, _socket}, _state) do
+    raise "implement"
   end
 
   defp establish_connection(state) do

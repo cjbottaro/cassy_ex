@@ -36,7 +36,7 @@ defmodule Cassandra.Frame.Result do
   defp from_binary(%{kind: :void} = frame, _data), do: frame
 
   defp from_binary(%{kind: :rows} = frame, data) do
-    use Bitwise
+    import Bitwise
 
     {flags, data} = read_int(data)
     {col_count, data} = read_int(data)
@@ -88,7 +88,7 @@ defmodule Cassandra.Frame.Result do
   end
 
   defp from_binary(%{kind: :prepared} = frame, data) do
-    use Bitwise
+    import Bitwise
 
     {query_id, data} = read_short_bytes(data)
     {flags, data} = read_int(data)
@@ -174,7 +174,7 @@ defmodule Cassandra.Frame.Result do
   # prepared results.
   defp read_col_specs(0, _flags, data), do: {nil, nil, [], data}
   defp read_col_specs(col_count, flags, data) do
-    use Bitwise
+    import Bitwise
 
     {keyspace, table, data} = if (flags &&& 0x0001) != 0 do
       {keyspace, data} = read_string(data)

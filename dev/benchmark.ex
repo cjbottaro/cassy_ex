@@ -14,7 +14,7 @@ defmodule Mix.Tasks.Benchmark do
   def run(_args) do
     label_filter = Jason.encode!(%{
       label: [
-        "com.docker.compose.project=cassandra_ex",
+        "com.docker.compose.project=cassandra-ex",
         "com.docker.compose.service=node"
       ]
     })
@@ -82,7 +82,8 @@ defmodule Mix.Tasks.Benchmark do
             {"blob", :rand.bytes(1024)},
             {"map<text,timestamp>", %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
             {"set<int>", MapSet.new([1, 1, 2, 3])}
-          ]
+          ],
+          consistency: :quorum
         )
       end)
     end
@@ -100,7 +101,8 @@ defmodule Mix.Tasks.Benchmark do
             {:blob, :rand.bytes(1024)},
             {{:map, :text, :timestamp}, %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
             {{:set, :int}, MapSet.new([1, 1, 2, 3])}
-          ]
+          ],
+          consistency: :quorum
         )
       end)
     end
@@ -113,7 +115,7 @@ defmodule Mix.Tasks.Benchmark do
       Enum.each(ids, fn id ->
         Xandra.execute!(xand, "SELECT * FROM test.benchmark WHERE id = ?", [
           {"uuid", id}
-        ])
+        ], consistency: :quorum)
       end)
     end
 
@@ -124,7 +126,8 @@ defmodule Mix.Tasks.Benchmark do
         Connection.execute!(conn, "SELECT * FROM test.benchmark WHERE id = ?",
           values: [
             {:uuid, id}
-          ]
+          ],
+          consistency: :quorum
         )
       end)
     end
@@ -145,7 +148,8 @@ defmodule Mix.Tasks.Benchmark do
             :rand.bytes(1024),
             %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()},
             MapSet.new([1, 1, 2, 3])
-          ]
+          ],
+          consistency: :quorum
         )
       end)
     end
@@ -164,7 +168,8 @@ defmodule Mix.Tasks.Benchmark do
             :rand.bytes(1024),
             %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()},
             MapSet.new([1, 1, 2, 3])
-          ]
+          ],
+          consistency: :quorum
         )
       end)
     end
@@ -176,7 +181,7 @@ defmodule Mix.Tasks.Benchmark do
     {time, _} = :timer.tc fn ->
       Enum.each(ids, fn id ->
         stmt = Xandra.prepare!(xand, "SELECT * FROM test.benchmark WHERE id = ?")
-        Xandra.execute!(xand, stmt, [id])
+        Xandra.execute!(xand, stmt, [id], consistency: :quorum)
       end)
     end
 
@@ -185,8 +190,124 @@ defmodule Mix.Tasks.Benchmark do
     {time, _} = :timer.tc fn ->
       Enum.each(ids, fn id ->
         stmt = Connection.prepare!(conn, "SELECT * FROM test.benchmark WHERE id = ?")
-        Connection.execute!(conn, stmt, values: [id])
+        Connection.execute!(conn, stmt, values: [id], consistency: :quorum)
       end)
+    end
+
+    IO.puts "Cassy  #{round(time/1000)}ms"
+
+    num_bytes = 1024*1024
+
+    IO.puts "\nINSERT (large)..."
+
+    {time, _} = :timer.tc fn ->
+      Enum.each(ids, fn id ->
+        Xandra.execute!(xand, """
+          INSERT INTO test.benchmark (id, b, m, s)
+          VALUES (?, ?, ?, ?)
+        """,
+          [
+            {"uuid", id},
+            {"blob", :rand.bytes(num_bytes)},
+            {"map<text,timestamp>", %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
+            {"set<int>", MapSet.new([1, 1, 2, 3])}
+          ],
+          consistency: :quorum
+        )
+      end)
+    end
+
+    IO.puts "Xandra #{round(time/1000)}ms"
+
+    {time, _} = :timer.tc fn ->
+      Enum.each(ids, fn id ->
+        Connection.execute!(conn, """
+          INSERT INTO test.benchmark (id, b, m, s)
+          VALUES (?, ?, ?, ?)
+        """,
+          values: [
+            {:uuid, id},
+            {:blob, :rand.bytes(num_bytes)},
+            {{:map, :text, :timestamp}, %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
+            {{:set, :int}, MapSet.new([1, 1, 2, 3])}
+          ],
+          consistency: :quorum
+        )
+      end)
+    end
+
+    IO.puts "Cassy  #{round(time/1000)}ms"
+
+    IO.puts "\nSELECT (large)..."
+
+    {time, _} = :timer.tc fn ->
+      Enum.each(ids, fn id ->
+        stmt = Xandra.prepare!(xand, "SELECT * FROM test.benchmark WHERE id = ?")
+        Xandra.execute!(xand, stmt, [id], consistency: :quorum)
+      end)
+    end
+
+    IO.puts "Xandra #{round(time/1000)}ms"
+
+    {time, _} = :timer.tc fn ->
+      Enum.each(ids, fn id ->
+        stmt = Connection.prepare!(conn, "SELECT * FROM test.benchmark WHERE id = ?")
+        Connection.execute!(conn, stmt, values: [id], consistency: :quorum)
+      end)
+    end
+
+    IO.puts "Cassy  #{round(time/1000)}ms"
+
+    num_bytes = 8*1024*1024
+
+    IO.puts "\nINSERT (single large)..."
+
+    {time, _} = :timer.tc fn ->
+      Xandra.execute!(xand, """
+        INSERT INTO test.benchmark (id, b, m, s)
+        VALUES (?, ?, ?, ?)
+      """,
+        [
+          {"uuid", Enum.at(ids, 0)},
+          {"blob", :rand.bytes(num_bytes)},
+          {"map<text,timestamp>", %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
+          {"set<int>", MapSet.new([1, 1, 2, 3])}
+        ],
+        consistency: :quorum
+      )
+    end
+
+    IO.puts "Xandra #{round(time/1000)}ms"
+
+    {time, _} = :timer.tc fn ->
+      Connection.execute!(conn, """
+        INSERT INTO test.benchmark (id, b, m, s)
+        VALUES (?, ?, ?, ?)
+      """,
+        values: [
+          {:uuid, Enum.at(ids, 0)},
+          {:blob, :rand.bytes(num_bytes)},
+          {{:map, :text, :timestamp}, %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
+          {{:set, :int}, MapSet.new([1, 1, 2, 3])}
+        ],
+        consistency: :quorum
+      )
+    end
+
+    IO.puts "Cassy  #{round(time/1000)}ms"
+
+    IO.puts "\nSELECT (large)..."
+
+    {time, _} = :timer.tc fn ->
+      stmt = Xandra.prepare!(xand, "SELECT * FROM test.benchmark WHERE id = ?")
+      Xandra.execute!(xand, stmt, [Enum.at(ids, 0)], consistency: :quorum)
+    end
+
+    IO.puts "Xandra #{round(time/1000)}ms"
+
+    {time, _} = :timer.tc fn ->
+      stmt = Connection.prepare!(conn, "SELECT * FROM test.benchmark WHERE id = ?")
+      Connection.execute!(conn, stmt, values: [Enum.at(ids, 0)], consistency: :quorum)
     end
 
     IO.puts "Cassy  #{round(time/1000)}ms"
