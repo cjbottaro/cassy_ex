@@ -24,13 +24,13 @@ defmodule Cassandra.Connection do
         if_test do: :telemetry.execute([:test, :fetch_prepared, :miss], %{})
         opts = Keyword.put(opts, :cql, cql)
         with {:ok, result} <- request(conn, Frame.Prepare, opts) do
-          Connection.cast(conn, {:cache_prepared, sha, result.query_id})
+          Connection.cast(conn, {:cache_prepared, sha, {result.query_id, result.columns}})
           {:ok, result}
         end
 
-      query_id ->
+      {query_id, columns} ->
         if_test do: :telemetry.execute([:test, :fetch_prepared, :hit], %{})
-        {:ok, %Result{kind: :prepared, query_id: query_id}}
+        {:ok, %Result{kind: :prepared, query_id: query_id, columns: columns}}
     end
   end
 
@@ -173,8 +173,8 @@ defmodule Cassandra.Connection do
     {:reply, state.prepared[sha], state}
   end
 
-  def handle_cast({:cache_prepared, sha, query_id}, state) when is_binary(sha) and is_binary(query_id) do
-    {:noreply, %{state | prepared: Map.put(state.prepared, sha, query_id)}}
+  def handle_cast({:cache_prepared, sha, payload}, state) when is_binary(sha) do
+    {:noreply, %{state | prepared: Map.put(state.prepared, sha, payload)}}
   end
 
   # Can this even happen?

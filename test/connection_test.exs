@@ -25,8 +25,8 @@ defmodule CassandraTest do
     end)
 
     {:ok, conn} = Connection.start_link(host: Enum.random(hosts))
+    {:ok, xand} = Xandra.start_link(nodes: [Enum.random(hosts)])
 
-    {:ok, _} = Connection.execute(conn, "DROP KEYSPACE IF EXISTS cassandra_test")
     {:ok, _} = Connection.execute(conn, """
       CREATE KEYSPACE IF NOT EXISTS test
       WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1 }
@@ -59,7 +59,15 @@ defmodule CassandraTest do
       )
     """)
 
-    %{conn: conn}
+    Connection.execute!(conn, "DROP TABLE IF EXISTS test.large")
+    Connection.execute!(conn, """
+      CREATE TABLE test.large (
+        id UUID PRIMARY KEY,
+        b BLOB
+      )
+    """)
+
+    %{conn: conn, xand: xand}
   end
 
   test "basic query", %{conn: conn} do
@@ -337,6 +345,60 @@ defmodule CassandraTest do
     assert error.message == "unrecognized CQL type 'short'"
     assert error.type == :client_library
     assert error.code == -1
+  end
+
+  @tag :focus
+  test "large data", %{conn: conn, xand: xand} do
+    id = uuid()
+    b = :rand.bytes(10 * 1024 * 1025)
+
+    {time, _} = :timer.tc fn ->
+      Connection.execute!(conn, "insert into test.large (id, b) values (?, ?)",
+        values: [id, {:blob, b}]
+      )
+    end
+
+    IO.puts "insert #{round(time/1000)}ms"
+
+    t1 = Task.async(fn ->
+      {time, _} = :timer.tc fn ->
+        Connection.execute!(conn, "select b from test.large where id = ?", values: [id])
+      end
+      time
+    end)
+
+    t2 = Task.async(fn ->
+      {time, _} = :timer.tc fn ->
+        Connection.execute!(conn, "select b from test.large where id = ?", values: [id])
+      end
+      time
+    end)
+
+    t1 = Task.await(t1)
+    t2 = Task.await(t2)
+
+    IO.puts "select1 #{round(t1/1000)}ms"
+    IO.puts "select2 #{round(t2/1000)}ms"
+
+    t1 = Task.async(fn ->
+      {time, _} = :timer.tc fn ->
+        Xandra.execute!(xand, "select b from test.large where id = ?", [{"uuid", id}])
+      end
+      time
+    end)
+
+    t2 = Task.async(fn ->
+      {time, _} = :timer.tc fn ->
+        Xandra.execute!(xand, "select b from test.large where id = ?", [{"uuid", id}])
+      end
+      time
+    end)
+
+    t1 = Task.await(t1)
+    t2 = Task.await(t2)
+
+    IO.puts "select1 #{round(t1/1000)}ms"
+    IO.puts "select2 #{round(t2/1000)}ms"
   end
 
   defp count_events(msg, f) do

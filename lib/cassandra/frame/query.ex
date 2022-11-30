@@ -23,7 +23,7 @@ defmodule Cassandra.Frame.Query do
   end
 
   def query_params_iodata(frame) do
-    use Bitwise
+    import Bitwise
 
     flags = 0
     iodata = []
@@ -32,7 +32,7 @@ defmodule Cassandra.Frame.Query do
       # Positional bindings
       l when is_list(l) ->
         values = if frame.columns do
-          Enum.zip(l, Enum.reverse(frame.columns)) # Remeber columns are backwards.
+          Enum.zip(l, Enum.reverse(frame.columns)) # Remember columns are backwards.
           |> Enum.map(fn {v, column} ->
             {_keyspace, _table, _name, type} = column
             value({type, v})

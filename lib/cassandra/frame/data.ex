@@ -369,7 +369,7 @@ defmodule Cassandra.Frame.Data do
   end
 
   defp varint_byte_size(value) when value > 127 do
-    use Bitwise
+    import Bitwise
     1 + varint_byte_size(value >>> 8)
   end
 
