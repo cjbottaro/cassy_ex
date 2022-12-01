@@ -1,3 +1,11 @@
+# String.split(s, "\n") |> Enum.reduce(%{sent: [], recv: []}, fn item, acc ->
+#   case String.split(item, ": ") do
+#     ["sent", n] -> update_in(acc.sent, fn list -> [String.to_integer(n) | list] end)
+#     ["recv", n] -> update_in(acc.recv, fn list -> [String.to_integer(n) | list] end)
+#     _ -> acc
+#   end
+# end)
+
 defmodule Cassandra.Connection do
   @moduledoc """
   Connect to a single Cassandra node
@@ -137,7 +145,7 @@ defmodule Cassandra.Connection do
       host: config[:host],
       socket: nil,
       connected: false,
-      stream: 0,
+      stream: 1,
       waiters: %{},
       buffer: [],
       prepared: %{}
@@ -180,7 +188,64 @@ defmodule Cassandra.Connection do
   @header_size 9
 
   def handle_info({:tcp, socket, data}, state) do
-    buffer = [state.buffer, data]
+    state = dispatch_messages([state.buffer, data], state)
+
+    :ok = :inet.setopts(socket, [active: :once])
+
+    {:noreply, state}
+  end
+
+    # IO.puts "recv'ed #{byte_size(data)}"
+    # buffer = [state.buffer, data]
+    # buffer_size = IO.iodata_length(buffer)
+
+    # buffer = if buffer_size < @header_size do
+    #   # IO.puts "need more header"
+    #   {:ok, data} = :gen_tcp.recv(socket, @header_size - buffer_size)
+    #   [buffer, data]
+    # else
+    #   buffer
+    # end
+
+    # <<header::9-bytes, buffer::binary>> = IO.iodata_to_binary(buffer)
+    # {:ok, header} = Frame.Header.from_binary(header)
+    # buffer_size = byte_size(buffer)
+    # body_size = header.length
+
+    # IO.puts "recv: #{header.stream}, #{body_size+9} bytes"
+
+    # # Our packet could be less than a frame... or more than a frame?
+
+    # buffer = if buffer_size < body_size do
+    #   # IO.puts "need more body"
+    #   {:ok, data} = :gen_tcp.recv(socket, body_size - buffer_size)
+    #   [buffer, data]
+    # else
+    #   buffer
+    # end
+
+    # <<body::binary-size(body_size), buffer::binary>> = IO.iodata_to_binary(buffer)
+
+    # if_test do: :telemetry.execute([:test, :frame, :recv], %{})
+
+    # {from, waiters} = Map.pop!(state.waiters, header.stream)
+    # :ok = Connection.reply(from, {:ok, header, body})
+
+    # # IO.puts "done"
+
+    # :ok = :inet.setopts(socket, [active: :once])
+
+    # {:noreply, %{state | waiters: waiters, buffer: buffer}}
+  # end
+
+  def handle_info({:tcp_closed, _socket}, _state) do
+    raise "implement"
+  end
+
+  @header_size 9
+
+  defp dispatch_messages(buffer, state) do
+    %{socket: socket} = state
 
     buffer_size = IO.iodata_length(buffer)
 
@@ -196,7 +261,7 @@ defmodule Cassandra.Connection do
     buffer_size = byte_size(buffer)
     body_size = header.length
 
-    # Our packet could be less than a frame... or more than a frame?
+    # Our packet could be less than a frame... or more than a frame.
 
     buffer = if buffer_size < body_size do
       {:ok, data} = :gen_tcp.recv(socket, body_size - buffer_size)
@@ -212,14 +277,16 @@ defmodule Cassandra.Connection do
     {from, waiters} = Map.pop!(state.waiters, header.stream)
     :ok = Connection.reply(from, {:ok, header, body})
 
-    :ok = :inet.setopts(socket, [active: :once])
+    state = %{state | waiters: waiters}
 
-    {:noreply, %{state | waiters: waiters, buffer: buffer}}
+    if byte_size(buffer) > 0 do
+      dispatch_messages(buffer, state)
+    else
+      %{state | buffer: buffer}
+    end
   end
 
-  def handle_info({:tcp_closed, _socket}, _state) do
-    raise "implement"
-  end
+
 
   defp establish_connection(state) do
     [host, port] = String.split(state.host, ":")

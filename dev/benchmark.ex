@@ -4,14 +4,21 @@ defmodule Mix.Tasks.Benchmark do
   @moduledoc """
   Run benchmarks again Xandra
   """
+alias DBConnection.Connection
 
   use Mix.Task
   use Cassandra
 
   @requirements ["app.start"]
+  @count 2000
+  @concurrency 20
+  @small_bytes 1024
+  @large_bytes 100*1024
 
   @doc false
   def run(_args) do
+    Logger.configure(level: :warn)
+
     label_filter = Jason.encode!(%{
       label: [
         "com.docker.compose.project=cassandra-ex",
@@ -34,7 +41,7 @@ defmodule Mix.Tasks.Benchmark do
     host = Enum.random(hosts)
 
     {:ok, conn} = Connection.start_link(host: host)
-    {:ok, xand} = Xandra.start_link(nodes: [host])
+    {:ok, xand} = Xandra.start_link(nodes: [host], pool_size: @concurrency)
 
     Connection.execute!(conn, """
       CREATE KEYSPACE IF NOT EXISTS test
@@ -51,270 +58,142 @@ defmodule Mix.Tasks.Benchmark do
       )
     """)
 
-    ids = Enum.map(1..1000, fn _ -> uuid() end)
+    ids = Enum.map(1..@count, fn _ -> uuid() end)
 
     # Warmup
-    Enum.take(ids, 10)
-    |> Enum.each(fn id ->
-      Xandra.execute!(xand, """
+
+    bench(Xandra, xand, :insert, ids, count: 100, bytes: 128, quiet: true)
+    bench(Connection, conn, :insert, ids, count: 100, bytes: 128, quiet: true)
+
+    bench(Xandra, xand, :select, ids, count: 100, quiet: true)
+    bench(Connection, conn, :select, ids, count: 100, quiet: true)
+
+    # Benchmarks
+
+    IO.puts "INSERT (1kb rows)\n"
+    bench(Xandra, xand, :insert, ids, bytes: @small_bytes)
+    bench(Connection, conn, :insert, ids, bytes: @small_bytes)
+
+    IO.puts "\nSELECT (1kb rows)\n"
+    bench(Xandra, xand, :select, ids)
+    bench(Connection, conn, :select, ids)
+
+    IO.puts "\nINSERT (1kb rows, prepared)\n"
+    bench(Xandra, xand, :insert, ids, bytes: @small_bytes, prepare: true)
+    bench(Connection, conn, :insert, ids, bytes: @small_bytes, prepare: true)
+
+    IO.puts "\nSELECT (1kb rows, prepared)\n"
+    bench(Xandra, xand, :select, ids, prepare: true)
+    bench(Connection, conn, :select, ids, prepare: true)
+
+    IO.puts "\nINSERT (1mb rows)\n"
+    bench(Xandra, xand, :insert, ids, bytes: @large_bytes)
+    bench(Connection, conn, :insert, ids, bytes: @large_bytes)
+
+    IO.puts "\nSELECT (1mb rows)\n"
+    bench(Xandra, xand, :select, ids)
+    bench(Connection, conn, :select, ids)
+
+    IO.puts "\nINSERT (1mb rows, prepared)\n"
+    bench(Xandra, xand, :insert, ids, bytes: @large_bytes, prepare: true)
+    bench(Connection, conn, :insert, ids, bytes: @large_bytes, prepare: true)
+
+    IO.puts "\nSELECT (1mb rows, prepared)\n"
+    bench(Xandra, xand, :select, ids, prepare: true)
+    bench(Connection, conn, :select, ids, prepare: true)
+
+  end
+
+  defp bench(mod, conn, type, ids, opts \\ []) do
+    ids = case opts[:count] do
+      nil -> ids
+      n -> Enum.take(ids, n)
+    end
+
+    cql = case type do
+      :insert -> """
         INSERT INTO test.benchmark (id, b, m, s)
         VALUES (?, ?, ?, ?)
-      """,
-        [
-          {"uuid", id},
-          {"blob", :rand.bytes(1024)},
-          {"map<text,timestamp>", %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
-          {"set<int>", MapSet.new([1, 1, 2, 3])}
-        ]
-      )
-    end)
+      """
 
-    IO.puts "INSERT..."
+      :select -> """
+        SELECT * FROM test.benchmark WHERE id = ?
+      """
+    end
+
+    bytes = opts[:bytes]
+    prepare = Keyword.get(opts, :prepare, false)
+    concurrency = Keyword.get(opts, :concurrency, @concurrency)
+
+    stmt = if prepare do
+      mod.prepare!(conn, cql)
+    else
+      cql
+    end
 
     {time, _} = :timer.tc fn ->
-      # Enum.each(ids, fn id ->
+
       Task.async_stream(ids, fn id ->
-        Xandra.execute!(xand, """
-          INSERT INTO test.benchmark (id, b, m, s)
-          VALUES (?, ?, ?, ?)
-        """,
-          [
-            {"uuid", id},
-            {"blob", :rand.bytes(1024)},
-            {"map<text,timestamp>", %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
-            {"set<int>", MapSet.new([1, 1, 2, 3])}
-          ],
-          consistency: :quorum
-        )
-      end, concurrency: 20)
-      |> Stream.run()
+        params = params(mod, type, prepare, id, bytes)
+        execute(mod, conn, stmt, params)
+      end, max_concurrency: concurrency, ordered: false)
+      |> Enum.each(fn {:ok, _} -> nil end)
+
     end
 
-    IO.puts "Xandra #{round(time/1000)}ms"
-
-    {time, _} = :timer.tc fn ->
-      # Enum.each(ids, fn id ->
-      Task.async_stream(ids, fn id ->
-        Connection.execute!(conn, """
-          INSERT INTO test.benchmark (id, b, m, s)
-          VALUES (?, ?, ?, ?)
-        """,
-          values: [
-            {:uuid, id},
-            {:blob, :rand.bytes(1024)},
-            {{:map, :text, :timestamp}, %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
-            {{:set, :int}, MapSet.new([1, 1, 2, 3])}
-          ],
-          consistency: :quorum
-        )
-      end, concurrency: 20, timeout: :infinity)
-      |> Stream.run()
+    if !opts[:quiet] do
+      case mod do
+        Xandra ->     IO.puts "  Xandra #{round(time/1000)}ms"
+        Connection -> IO.puts "  Cassy  #{round(time/1000)}ms"
+      end
     end
+  end
 
-    IO.puts "Cassy  #{round(time/1000)}ms"
+  defp execute(Xandra, conn, stmt, params) do
+    Xandra.execute!(conn, stmt, params, consistency: :quorum)
+  end
 
-    IO.puts "\nSELECT..."
+  defp execute(Connection, conn, stmt, params) do
+    Connection.execute!(conn, stmt, values: params, consistency: :quorum)
+  end
 
-    {time, _} = :timer.tc fn ->
-      Enum.each(ids, fn id ->
-        Xandra.execute!(xand, "SELECT * FROM test.benchmark WHERE id = ?", [
-          {"uuid", id}
-        ], consistency: :quorum)
-      end)
-    end
+  defp params(Xandra, :insert, false, id, bytes) do
+    [
+      {"uuid", id},
+      {"blob", :rand.bytes(bytes)},
+      {"map<text,timestamp>", %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
+      {"set<int>", MapSet.new([1, 1, 2, 3])}
+    ]
+  end
 
-    IO.puts "Xandra #{round(time/1000)}ms"
+  defp params(Connection, :insert, false, id, bytes) do
+    [
+      {:uuid, id},
+      {:blob, :rand.bytes(bytes)},
+      {{:map, :text, :timestamp}, %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
+      {{:set, :int}, MapSet.new([1, 1, 2, 3])}
+    ]
+  end
 
-    {time, _} = :timer.tc fn ->
-      Enum.each(ids, fn id ->
-        Connection.execute!(conn, "SELECT * FROM test.benchmark WHERE id = ?",
-          values: [
-            {:uuid, id}
-          ],
-          consistency: :quorum
-        )
-      end)
-    end
+  defp params(_mod, :insert, true, id, bytes) do
+    [
+      id,
+      :rand.bytes(bytes),
+      %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()},
+      MapSet.new([1, 1, 2, 3])
+    ]
+  end
 
-    IO.puts "Cassy  #{round(time/1000)}ms"
+  defp params(Xandra, :select, false, id, nil) do
+    [{"uuid", id}]
+  end
 
-    IO.puts "\nINSERT (prepared)..."
+  defp params(Connection, :select, false, id, nil) do
+    [{:uuid, id}]
+  end
 
-    {time, _} = :timer.tc fn ->
-      Enum.each(ids, fn id ->
-        stmt = Xandra.prepare!(xand, """
-          INSERT INTO test.benchmark (id, b, m, s)
-          VALUES (?, ?, ?, ?)
-        """)
-        Xandra.execute!(xand, stmt,
-          [
-            id,
-            :rand.bytes(1024),
-            %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()},
-            MapSet.new([1, 1, 2, 3])
-          ],
-          consistency: :quorum
-        )
-      end)
-    end
-
-    IO.puts "Xandra #{round(time/1000)}ms"
-
-    {time, _} = :timer.tc fn ->
-      Enum.each(ids, fn id ->
-        stmt = Connection.prepare!(conn, """
-          INSERT INTO test.benchmark (id, b, m, s)
-          VALUES (?, ?, ?, ?)
-        """)
-        Connection.execute!(conn, stmt,
-          values: [
-            id,
-            :rand.bytes(1024),
-            %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()},
-            MapSet.new([1, 1, 2, 3])
-          ],
-          consistency: :quorum
-        )
-      end)
-    end
-
-    IO.puts "Cassy  #{round(time/1000)}ms"
-
-    IO.puts "\nSELECT (prepared)..."
-
-    {time, _} = :timer.tc fn ->
-      Enum.each(ids, fn id ->
-        stmt = Xandra.prepare!(xand, "SELECT * FROM test.benchmark WHERE id = ?")
-        Xandra.execute!(xand, stmt, [id], consistency: :quorum)
-      end)
-    end
-
-    IO.puts "Xandra #{round(time/1000)}ms"
-
-    {time, _} = :timer.tc fn ->
-      Enum.each(ids, fn id ->
-        stmt = Connection.prepare!(conn, "SELECT * FROM test.benchmark WHERE id = ?")
-        Connection.execute!(conn, stmt, values: [id], consistency: :quorum)
-      end)
-    end
-
-    IO.puts "Cassy  #{round(time/1000)}ms"
-
-    num_bytes = 1024*1024
-
-    IO.puts "\nINSERT (large)..."
-
-    {time, _} = :timer.tc fn ->
-      Enum.each(ids, fn id ->
-        Xandra.execute!(xand, """
-          INSERT INTO test.benchmark (id, b, m, s)
-          VALUES (?, ?, ?, ?)
-        """,
-          [
-            {"uuid", id},
-            {"blob", :rand.bytes(num_bytes)},
-            {"map<text,timestamp>", %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
-            {"set<int>", MapSet.new([1, 1, 2, 3])}
-          ],
-          consistency: :quorum
-        )
-      end)
-    end
-
-    IO.puts "Xandra #{round(time/1000)}ms"
-
-    {time, _} = :timer.tc fn ->
-      Enum.each(ids, fn id ->
-        Connection.execute!(conn, """
-          INSERT INTO test.benchmark (id, b, m, s)
-          VALUES (?, ?, ?, ?)
-        """,
-          values: [
-            {:uuid, id},
-            {:blob, :rand.bytes(num_bytes)},
-            {{:map, :text, :timestamp}, %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
-            {{:set, :int}, MapSet.new([1, 1, 2, 3])}
-          ],
-          consistency: :quorum
-        )
-      end)
-    end
-
-    IO.puts "Cassy  #{round(time/1000)}ms"
-
-    IO.puts "\nSELECT (large)..."
-
-    {time, _} = :timer.tc fn ->
-      Enum.each(ids, fn id ->
-        stmt = Xandra.prepare!(xand, "SELECT * FROM test.benchmark WHERE id = ?")
-        Xandra.execute!(xand, stmt, [id], consistency: :quorum)
-      end)
-    end
-
-    IO.puts "Xandra #{round(time/1000)}ms"
-
-    {time, _} = :timer.tc fn ->
-      Enum.each(ids, fn id ->
-        stmt = Connection.prepare!(conn, "SELECT * FROM test.benchmark WHERE id = ?")
-        Connection.execute!(conn, stmt, values: [id], consistency: :quorum)
-      end)
-    end
-
-    IO.puts "Cassy  #{round(time/1000)}ms"
-
-    num_bytes = 8*1024*1024
-
-    IO.puts "\nINSERT (single large)..."
-
-    {time, _} = :timer.tc fn ->
-      Xandra.execute!(xand, """
-        INSERT INTO test.benchmark (id, b, m, s)
-        VALUES (?, ?, ?, ?)
-      """,
-        [
-          {"uuid", Enum.at(ids, 0)},
-          {"blob", :rand.bytes(num_bytes)},
-          {"map<text,timestamp>", %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
-          {"set<int>", MapSet.new([1, 1, 2, 3])}
-        ],
-        consistency: :quorum
-      )
-    end
-
-    IO.puts "Xandra #{round(time/1000)}ms"
-
-    {time, _} = :timer.tc fn ->
-      Connection.execute!(conn, """
-        INSERT INTO test.benchmark (id, b, m, s)
-        VALUES (?, ?, ?, ?)
-      """,
-        values: [
-          {:uuid, Enum.at(ids, 0)},
-          {:blob, :rand.bytes(num_bytes)},
-          {{:map, :text, :timestamp}, %{"foo" => DateTime.utc_now(), "bar" => DateTime.utc_now()}},
-          {{:set, :int}, MapSet.new([1, 1, 2, 3])}
-        ],
-        consistency: :quorum
-      )
-    end
-
-    IO.puts "Cassy  #{round(time/1000)}ms"
-
-    IO.puts "\nSELECT (large)..."
-
-    {time, _} = :timer.tc fn ->
-      stmt = Xandra.prepare!(xand, "SELECT * FROM test.benchmark WHERE id = ?")
-      Xandra.execute!(xand, stmt, [Enum.at(ids, 0)], consistency: :quorum)
-    end
-
-    IO.puts "Xandra #{round(time/1000)}ms"
-
-    {time, _} = :timer.tc fn ->
-      stmt = Connection.prepare!(conn, "SELECT * FROM test.benchmark WHERE id = ?")
-      Connection.execute!(conn, stmt, values: [Enum.at(ids, 0)], consistency: :quorum)
-    end
-
-    IO.puts "Cassy  #{round(time/1000)}ms"
+  defp params(_mod, :select, true, id, nil) do
+    [id]
   end
 
 end
