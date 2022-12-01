@@ -7,7 +7,7 @@ defmodule CassandraTest do
 
     label_filter =Jason.encode!(%{
       label: [
-        "com.docker.compose.project=cassandra_ex",
+        "com.docker.compose.project=cassandra-ex",
         "com.docker.compose.service=node"
       ]
     })

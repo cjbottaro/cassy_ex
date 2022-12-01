@@ -72,7 +72,8 @@ defmodule Mix.Tasks.Benchmark do
     IO.puts "INSERT..."
 
     {time, _} = :timer.tc fn ->
-      Enum.each(ids, fn id ->
+      # Enum.each(ids, fn id ->
+      Task.async_stream(ids, fn id ->
         Xandra.execute!(xand, """
           INSERT INTO test.benchmark (id, b, m, s)
           VALUES (?, ?, ?, ?)
@@ -85,13 +86,15 @@ defmodule Mix.Tasks.Benchmark do
           ],
           consistency: :quorum
         )
-      end)
+      end, concurrency: 20)
+      |> Stream.run()
     end
 
     IO.puts "Xandra #{round(time/1000)}ms"
 
     {time, _} = :timer.tc fn ->
-      Enum.each(ids, fn id ->
+      # Enum.each(ids, fn id ->
+      Task.async_stream(ids, fn id ->
         Connection.execute!(conn, """
           INSERT INTO test.benchmark (id, b, m, s)
           VALUES (?, ?, ?, ?)
@@ -104,7 +107,8 @@ defmodule Mix.Tasks.Benchmark do
           ],
           consistency: :quorum
         )
-      end)
+      end, concurrency: 20, timeout: :infinity)
+      |> Stream.run()
     end
 
     IO.puts "Cassy  #{round(time/1000)}ms"
